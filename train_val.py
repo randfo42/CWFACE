@@ -8,17 +8,20 @@ import head
 import net
 import numpy as np
 import utils
+import pickle
 
 
 class Trainer(LightningModule):
-    def __init__(self, **kwargs):
+    def __init__(self,**kwargs):
         super(Trainer, self).__init__()
         self.save_hyperparameters()  # sets self.hparams
 
         self.class_num = utils.get_num_class(self.hparams)
         print('classnum: {}'.format(self.class_num))
+               
 
         self.model = net.build_model(model_name=self.hparams.arch)
+        
         self.head = head.build_head(head_type=self.hparams.head,
                                      embedding_size=512,
                                      class_num=self.class_num,
@@ -29,6 +32,8 @@ class Trainer(LightningModule):
                                      )
 
         self.cross_entropy_loss = CrossEntropyLoss()
+        
+        self.class_sample_num = self.hparams.head=='cwlnface'
 
         if self.hparams.start_from_model_statedict:
             ckpt = torch.load(self.hparams.start_from_model_statedict)
@@ -36,20 +41,67 @@ class Trainer(LightningModule):
                                         for key,val in ckpt['state_dict'].items() if 'model.' in key})
 
 
-    def forward(self, images, labels):
+    def forward(self, images, labels,class_sample_num_=None):
         embeddings, norms = self.model(images)
-        cos_thetas = self.head(embeddings, norms, labels)
+        if self.class_sample_num:
+            cos_thetas = self.head(embeddings, norms, labels,class_sample_num_)
+        else:
+            if self.hparams.head == 'cwlmagface':
+                cos_thetas,normalized_norm = self.head(embeddings, norms, labels)
+            else:
+                cos_thetas = self.head(embeddings, norms, labels)
+        
         if isinstance(cos_thetas, tuple):
+            print("cos_thetas",cos_thetas)
             cos_thetas, bad_grad = cos_thetas
             labels[bad_grad.squeeze(-1)] = -100 # ignore_index
-        return cos_thetas, norms, embeddings, labels
+            
+        if self.hparams.head == 'cwlmagface':
+             return cos_thetas, normalized_norm, embeddings, labels
+        else:
+            return cos_thetas, norms, embeddings, labels
 
 
     def training_step(self, batch, batch_idx):
-        images, labels = batch
+        
+        if self.class_sample_num:
+            images, (labels,class_sample_num_) = batch
+            cos_thetas, norms, embeddings, labels = self.forward(images, labels,class_sample_num_)
+        else:
+            
+            images, labels = batch
+            cos_thetas, norms, embeddings, labels = self.forward(images, labels)
 
-        cos_thetas, norms, embeddings, labels = self.forward(images, labels)
+        
         loss_train = self.cross_entropy_loss(cos_thetas, labels)
+        
+        if self.hparams.head == 'cwlmagface':
+             ## norms == G_loss at head
+            loss_train = loss_train + norms.mean()
+        
+        
+        
+        ## add loss
+        #weight_norm = self.head.get_weight_norm()
+        
+        #max_weight_norm = max(weight_norm)
+        #max_weight_norm.require_grad = False
+        
+        #weight_norm_loss = torch.sqrt(max_weight_norm - weight_norm).mean()
+        #loss_train = loss_train + 0.01*weight_norm_loss
+       
+        ## add loss2 
+
+        #safe_norm = torch.clip(norms,min=0.001,max=100)
+        
+        #max_norm = max(safe_norm.clone().detach())
+        #max_norm.require_grad = False 
+        
+        #max_norm_loss = torch.sqrt(max_norm - safe_norm).mean()
+        #loss_train = loss_train + max_norm_loss
+        
+        ##########
+        
         lr = self.trainer.lr_schedulers[0]['scheduler'].get_last_lr()[0]
 
         # log
@@ -59,6 +111,12 @@ class Trainer(LightningModule):
         return loss_train
 
     def training_epoch_end(self, outputs):
+        #if self.hparams.head == 'cwcface':
+        #    data = {'feature_mb':self.head.feature_mb, 'proxy_mb':self.head.proxy_mb}
+        #    with open(f'regist50nms_{self.current_epoch}.pickle','wb') as f:
+        #        pickle.dump(data,f)
+            
+
         return None
 
     def validation_step(self, batch, batch_idx):

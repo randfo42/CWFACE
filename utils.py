@@ -97,7 +97,7 @@ def get_num_class(hparams):
     if hparams.custom_num_class != -1:
         return hparams.custom_num_class
 
-    if 'faces_emore' in hparams.train_data_path.lower():
+    if 'faces_emore' in hparams.train_data_path.lower() or 'ms1m' in hparams.train_data_path.lower():
         # MS1MV2
         class_num = 70722 if hparams.train_data_subset else 85742
     elif 'ms1m-retinaface-t1' in hparams.train_data_path.lower():

@@ -13,12 +13,16 @@ import train_val
 import data
 import inspect
 
+os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"   
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+
 def main(args):
 
     hparams = dotdict(vars(args))
 
-    trainer_mod = train_val.Trainer(**hparams)
+    
     data_mod = data.DataModule(**hparams)
+    trainer_mod = train_val.Trainer(**hparams)
 
     if hparams.seed is not None:
         seed_everything(hparams.seed)

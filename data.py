@@ -7,7 +7,7 @@ import pandas as pd
 import evaluate_utils
 from dataset.image_folder_dataset import CustomImageFolderDataset
 from dataset.five_validation_dataset import FiveValidationDataset
-from dataset.record_dataset import AugmentRecordDataset
+from dataset.record_dataset import AugmentRecordDataset,AugmentRecordDatasetWithLabelNum
 
 
 class DataModule(pl.LightningDataModule):
@@ -27,7 +27,9 @@ class DataModule(pl.LightningDataModule):
         self.photometric_augmentation_prob = kwargs['photometric_augmentation_prob']
         self.swap_color_channel = kwargs['swap_color_channel']
         self.use_mxrecord = kwargs['use_mxrecord']
-
+        
+        self.class_sample_num = kwargs['head'] == 'cwlnface'
+        
         concat_mem_file_name = os.path.join(self.data_root, self.val_data_path, 'concat_validation_memfile')
         self.concat_mem_file_name = concat_mem_file_name
 
@@ -61,7 +63,9 @@ class DataModule(pl.LightningDataModule):
                                                self.photometric_augmentation_prob,
                                                self.swap_color_channel,
                                                self.use_mxrecord,
-                                               self.output_dir
+                                               self.output_dir,
+                                               class_sample_num = self.class_sample_num
+                                               
                                                )
 
             if 'faces_emore' in self.train_data_path and self.train_data_subset:
@@ -124,7 +128,9 @@ def train_dataset(data_root, train_data_path,
                   photometric_augmentation_prob,
                   swap_color_channel,
                   use_mxrecord,
-                  output_dir):
+                  output_dir,
+                  class_sample_num=False
+                 ):
 
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
@@ -134,13 +140,24 @@ def train_dataset(data_root, train_data_path,
 
     if use_mxrecord:
         train_dir = os.path.join(data_root, train_data_path)
-        train_dataset = AugmentRecordDataset(root_dir=train_dir,
-                                             transform=train_transform,
-                                             low_res_augmentation_prob=low_res_augmentation_prob,
-                                             crop_augmentation_prob=crop_augmentation_prob,
-                                             photometric_augmentation_prob=photometric_augmentation_prob,
-                                             swap_color_channel=swap_color_channel,
-                                             output_dir=output_dir)
+        if class_sample_num:
+            
+            train_dataset = AugmentRecordDatasetWithLabelNum(root_dir=train_dir,
+                                     transform=train_transform,
+                                     low_res_augmentation_prob=low_res_augmentation_prob,
+                                     crop_augmentation_prob=crop_augmentation_prob,
+                                     photometric_augmentation_prob=photometric_augmentation_prob,
+                                     swap_color_channel=swap_color_channel,
+                                     output_dir=output_dir)
+
+        else:
+            train_dataset = AugmentRecordDataset(root_dir=train_dir,
+                                                 transform=train_transform,
+                                                 low_res_augmentation_prob=low_res_augmentation_prob,
+                                                 crop_augmentation_prob=crop_augmentation_prob,
+                                                 photometric_augmentation_prob=photometric_augmentation_prob,
+                                                 swap_color_channel=swap_color_channel,
+                                                 output_dir=output_dir)
     else:
         train_dir = os.path.join(data_root, train_data_path, 'imgs')
         train_dataset = CustomImageFolderDataset(root=train_dir,
