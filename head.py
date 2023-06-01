@@ -47,8 +47,8 @@ def build_head(head_type,
                s=s,
                t_alpha=t_alpha,
                )
-    elif head_type == 'cwlmagface':
-        head = CWLMAGFace(embedding_size=embedding_size,
+    elif head_type == 'lamaface':
+        head = LAMAFace(embedding_size=embedding_size,
                classnum=class_num,
                m=m,
                h=h,
@@ -76,6 +76,12 @@ def build_head(head_type,
                        m=m,
                        s=s,
                        )
+    elif head_type == 'magface':
+        head = MagFace(embedding_size=embedding_size,
+                classnum=class_num,
+                m=m,
+                s=s,
+                )
     else:
         raise ValueError('not a correct head type', head_type)
     return head
@@ -84,6 +90,98 @@ def l2_norm(input,axis=1):
     norm = torch.norm(input,2,axis,True)
     output = torch.div(input, norm)
     return output
+
+class LAMAFace(Module):
+    def __init__(self,
+                 embedding_size=512,
+                 classnum=70722,
+                 m=0.4,
+                 h=0.333,
+                 s=64.,
+                 t_alpha=1.0,
+                 ):
+        super(LAMAFace, self).__init__()
+        self.classnum = classnum
+        self.kernel = Parameter(torch.Tensor(embedding_size,classnum))
+        
+        self.kernel_mb = torch.zeros(embedding_size,classnum)
+
+        # initial kernel
+        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.m = m 
+        self.eps = 1e-3
+        self.h = h
+        self.s = s
+
+        # ema prep
+        self.t_alpha = t_alpha
+        self.register_buffer('t', torch.zeros(1))
+        #self.register_buffer('batch_mean', torch.ones(1)*(20))
+        #self.register_buffer('batch_mean', torch.ones(classnum)*(20))
+        #self.register_buffer('batch_std', torch.ones(1)*(10))
+        
+        #TODO
+        self.feature_mb = [torch.zeros(0).cuda()]*classnum
+        self.proxy_mb = [torch.zeros(0).cuda()]*classnum
+        
+        #self.register_buffer('feature_mb', [torch.zeros(0).cuda()]*classnum)
+        #self.register_buffer('proxy_mb',[torch.zeros(0).cuda()]*classnum)
+        
+        self.queue_size = 30  ## hyperparm... 
+        self.compensate = False ## important 
+          
+       
+        print('\n\CWCFace with the following property')
+        print('self.m', self.m)
+        print('self.h', self.h)
+        print('self.s', self.s)
+        print('self.t_alpha', self.t_alpha)
+
+    def update(self, feature_norm, label, kernel_norm):
+        
+        for fn,lb in zip(feature_norm,label):
+            self.feature_mb[lb] = torch.cat([self.feature_mb[lb],fn.data],dim=0)
+            self.proxy_mb[lb] = torch.cat([self.proxy_mb[lb],kernel_norm[lb].unsqueeze(0).data],dim=0)
+            
+        
+        for lu in label.unique():
+            over_size = self.feature_mb[lu].shape[0] - self.queue_size
+            if over_size > 0:
+                self.feature_mb[lu] = self.feature_mb[lu][over_size:]
+                self.proxy_mb[lu] = self.proxy_mb[lu][over_size:]
+        
+        
+    def feature_norm_normalize(self,feature_norm,label):
+        ## normalize by estimated mean and std
+       
+        kernel_norm = torch.norm(self.kernel,dim=0)
+        
+        self.update(feature_norm,label,kernel_norm)
+        
+        res = torch.zeros(feature_norm.shape).cuda()
+
+        for val,(fn,lb) in enumerate(zip(feature_norm,label)):
+            if self.compensate:
+                ## fail
+                compensate_val = self.feature_mb[lb] * kernel_norm[lb] / (self.proxy_mb[lb]+1e-3)
+                
+                ## ver2
+                ##compensate_val = self.feature_mb[lb] + (self.feature_mb[lb]/self.proxy_mb[lb]) * (kernel_norm[lb] - self.proxy_mb[lb])
+            else:
+                compensate_val = self.feature_mb[lb]
+            
+            
+            if compensate_val.shape[0]>2:
+                res[val] = (fn - compensate_val.mean()) / (compensate_val.std() + self.eps)
+            else:
+                res[val] = (fn - compensate_val.mean()) / 20 
+
+
+
+        return res
+
+
+
 
 class CWCFace(Module):
     def __init__(self,
@@ -726,6 +824,71 @@ class CWFace(Module):
         # scale
         scaled_cosine_m = cosine * self.s
         return scaled_cosine_m
+
+class MagFace(Module):
+    def __init__(self,
+                 embedding_size=512,
+                 classnum=70722,
+                 m=0.4,
+                 h=0.333,
+                 s=64.,
+                 t_alpha=1.0,
+                 l_margin = 0.45,
+                 u_margin = 0.8,
+                 l_a = 10,
+                 u_a = 110,
+                 ):
+        super(MagFace, self).__init__()
+        self.classnum = classnum
+        self.kernel = Parameter(torch.Tensor(embedding_size,classnum))
+
+        # initial kernel
+        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.m = m 
+        self.eps = 1e-3
+        self.h = h
+        self.s = s
+
+        self.l_margin = l_margin
+        self.u_margin = u_margin
+        self.l_a = l_a
+        self.u_a = u_a
+
+    def _margin(self, x):
+        """generate adaptive margin
+        """
+        margin = (self.u_margin-self.l_margin) / \
+            (self.u_a-self.l_a)*(x-self.l_a) + self.l_margin
+        return margin
+    
+    def calc_loss_G(self, x_norm):
+        g = 1/(self.u_a**2) * x_norm + 1/(x_norm)
+        return torch.mean(g)
+
+    def forward(self, embbedings, norms, label):
+
+        kernel_norm = l2_norm(self.kernel,axis=0)
+        cosine = torch.mm(embbedings,kernel_norm)
+        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
+
+        m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
+
+
+        ada_margin = self._margin(norms)        
+        m_arc = m_arc * ada_margin
+        theta = cosine.acos()
+        theta_m = torch.clip(theta + m_arc, min=self.eps, max=math.pi-self.eps)
+        cosine = theta_m.cos()
+
+
+        # scale
+        scaled_cosine_m = cosine * self.s
+        return scaled_cosine_m
+        
+
+
+
 
 
 

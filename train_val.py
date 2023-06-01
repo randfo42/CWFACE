@@ -32,8 +32,9 @@ class Trainer(LightningModule):
                                      )
 
         self.cross_entropy_loss = CrossEntropyLoss()
-        
+        self.cross_entropy_loss_non_redu = CrossEntropyLoss(reduction='none')
         self.class_sample_num = self.hparams.head=='cwlnface'
+        self.relu = torch.nn.ReLU()
 
         if self.hparams.start_from_model_statedict:
             ckpt = torch.load(self.hparams.start_from_model_statedict)
@@ -54,6 +55,7 @@ class Trainer(LightningModule):
         if isinstance(cos_thetas, tuple):
             print("cos_thetas",cos_thetas)
             cos_thetas, bad_grad = cos_thetas
+            print(bad_grad)
             labels[bad_grad.squeeze(-1)] = -100 # ignore_index
             
         if self.hparams.head == 'cwlmagface':
@@ -68,18 +70,20 @@ class Trainer(LightningModule):
             images, (labels,class_sample_num_) = batch
             cos_thetas, norms, embeddings, labels = self.forward(images, labels,class_sample_num_)
         else:
-            
             images, labels = batch
             cos_thetas, norms, embeddings, labels = self.forward(images, labels)
 
-        
-        loss_train = self.cross_entropy_loss(cos_thetas, labels)
+        if True:
+            loss_train = (0.1*self.relu(-(norms-30)) * self.cross_entropy_loss_non_redu(cos_thetas,labels)).mean()
+        else:
+            loss_train = self.cross_entropy_loss(cos_thetas, labels)
         
         if self.hparams.head == 'cwlmagface':
              ## norms == G_loss at head
             loss_train = loss_train + norms.mean()
-        
-        
+        if self.hparams.head == 'magface':
+            loss_train = loss_train + 35 * self.head.calc_loss_G(norms)
+
         
         ## add loss
         #weight_norm = self.head.get_weight_norm()
