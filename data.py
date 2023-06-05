@@ -7,7 +7,7 @@ import pandas as pd
 import evaluate_utils
 from dataset.image_folder_dataset import CustomImageFolderDataset
 from dataset.five_validation_dataset import FiveValidationDataset
-from dataset.record_dataset import AugmentRecordDataset,AugmentRecordDatasetWithLabelNum
+from dataset.record_dataset import AugmentRecordDataset,AugmentRecordDatasetWithLabelNum,AugmentRecordDatasetWithIdx
 
 
 class DataModule(pl.LightningDataModule):
@@ -28,7 +28,9 @@ class DataModule(pl.LightningDataModule):
         self.swap_color_channel = kwargs['swap_color_channel']
         self.use_mxrecord = kwargs['use_mxrecord']
         
-        self.class_sample_num = kwargs['head'] == 'cwlnface'
+        self.class_sample_num = kwargs['head'] == 'cwlnface' ##TODO
+        self.class_sample_index = kwargs['head'] == 'adaface' ##TODO
+
         
         concat_mem_file_name = os.path.join(self.data_root, self.val_data_path, 'concat_validation_memfile')
         self.concat_mem_file_name = concat_mem_file_name
@@ -64,8 +66,8 @@ class DataModule(pl.LightningDataModule):
                                                self.swap_color_channel,
                                                self.use_mxrecord,
                                                self.output_dir,
-                                               class_sample_num = self.class_sample_num
-                                               
+                                               class_sample_num = self.class_sample_num,
+                                               class_sample_index = self.class_sample_index
                                                )
 
             if 'faces_emore' in self.train_data_path and self.train_data_subset:
@@ -129,7 +131,8 @@ def train_dataset(data_root, train_data_path,
                   swap_color_channel,
                   use_mxrecord,
                   output_dir,
-                  class_sample_num=False
+                  class_sample_num=False,
+                  class_sample_index = False
                  ):
 
     train_transform = transforms.Compose([
@@ -149,7 +152,14 @@ def train_dataset(data_root, train_data_path,
                                      photometric_augmentation_prob=photometric_augmentation_prob,
                                      swap_color_channel=swap_color_channel,
                                      output_dir=output_dir)
-
+        elif class_sample_index:
+            train_dataset = AugmentRecordDatasetWithIdx(root_dir=train_dir,
+                            transform=train_transform,
+                            low_res_augmentation_prob=low_res_augmentation_prob,
+                            crop_augmentation_prob=crop_augmentation_prob,
+                            photometric_augmentation_prob=photometric_augmentation_prob,
+                            swap_color_channel=swap_color_channel,
+                            output_dir=output_dir)
         else:
             train_dataset = AugmentRecordDataset(root_dir=train_dir,
                                                  transform=train_transform,
