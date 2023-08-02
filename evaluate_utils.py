@@ -14,7 +14,12 @@ def get_val_data(data_path):
     lfw, lfw_issame = get_val_pair(data_path, 'lfw')
     cplfw, cplfw_issame = get_val_pair(data_path, 'cplfw')
     calfw, calfw_issame = get_val_pair(data_path, 'calfw')
-    return agedb_30, cfp_fp, lfw, agedb_30_issame, cfp_fp_issame, lfw_issame, cplfw, cplfw_issame, calfw, calfw_issame
+    african, african_issame = get_val_pair(data_path,'African_test')
+    asian, asian_issame = get_val_pair(data_path,'Asian_test')
+    caucasian, caucasian_issame = get_val_pair(data_path,'Caucasian_test')
+    indian, indian_issame = get_val_pair(data_path,'Indian_test')
+
+    return agedb_30, cfp_fp, lfw, agedb_30_issame, cfp_fp_issame, lfw_issame, cplfw, cplfw_issame, calfw, calfw_issame,african, african_issame,asian, asian_issame,caucasian, caucasian_issame,indian, indian_issame
 
 def get_val_pair(path, name, use_memfile=True):
     if use_memfile:

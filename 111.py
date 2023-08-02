@@ -72,20 +72,12 @@ def build_head(head_type,
                s=s,
                t_alpha=t_alpha,
                )
-    elif head_type == 'adawindexface':
-        head = AdaWIndexFace(embedding_size=embedding_size,
-               classnum=class_num,
-               m=m,
-               h=h,
-               s=s,
-               t_alpha=t_alpha,
-               )
-    elif head_type == 'adasface':
-        head = AdaSFace(embedding_size=embedding_size,
+
+    elif head_type == 'arcface':
+        head = ArcFace(embedding_size=embedding_size,
                        classnum=class_num,
                        m=m,
                        s=s,
-                       t_alpha=t_alpha,
                        )
     elif head_type == 'cosface':
         head = CosFace(embedding_size=embedding_size,
@@ -99,13 +91,6 @@ def build_head(head_type,
                 m=m,
                 s=s,
                 )
-    elif head_type == 'utilface':
-        head = utilFace(embedding_size=embedding_size,
-                classnum=class_num,
-                m=m,
-                s=s,
-                )
- 
     else:
         raise ValueError('not a correct head type', head_type)
     return head
@@ -115,227 +100,6 @@ def l2_norm(input,axis=1):
     output = torch.div(input, norm)
     return output
 
-####TODO 
-
-class utilFace(Module):
-    def __init__(self,
-                 embedding_size=512,
-                 classnum=70722,
-                 m=0.4,
-                 h=0.333,
-                 s=64.,
-                 t_alpha=1.0,
-                 ):
-        super(utilFace, self).__init__()
-        self.classnum = classnum
-        self.kernel = Parameter(torch.Tensor(embedding_size,classnum))
-
-        # initial kernel
-        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
-        self.m = m 
-        self.eps = 1e-3
-        self.h = h
-        self.s = s
-
-        # ema prep
-        self.t_alpha = t_alpha
-        self.register_buffer('t', torch.zeros(1))
-
-        self.register_buffer('batch_mean', torch.ones(1)*(20))
-        self.register_buffer('classwise_mean', torch.ones(classnum)*(20))
-        self.register_buffer('batch_std', torch.ones(1)*(10))
-        self.soft_max = nn.Softmax(dim=1)
-        self.register_buffer('distill_buffer', self.soft_max(torch.ones(classnum,classnum)*0.5))
-        self.kl_loss = nn.KLDivLoss(reduction="batchmean")
-
-
-        ### KL sampling 
-        
-
-        print('\n\CWFace with the following property')
-        print('self.m', self.m)
-        print('self.h', self.h)
-        print('self.s', self.s)
-        print('self.t_alpha', self.t_alpha)
-
-
-    def forward(self, embbedings, norms, label):
-
-        kernel_norm = l2_norm(self.kernel,axis=0)
-        cosine = torch.mm(embbedings,kernel_norm)
-        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
-
-        
-        safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
-        
-        
-
-       
-        # update batchmean batchstd
-        with torch.no_grad():
-
-            lu = label.unique()
-            ## group by mean! 
-            M = torch.zeros(self.classnum,label.size()[0]).cuda()
-            M[label.squeeze(),torch.arange(label.size()[0])] = 1
-            M = torch.nn.functional.normalize(M, p=1, dim=1)
-            
-            batch_group_mean = torch.mm(M,safe_norms).squeeze().detach()
-            mean = safe_norms.mean().detach()
-            std = safe_norms.std().detach()
-                        
-            self.classwise_mean[lu] = batch_group_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.classwise_mean[lu]
-            self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
-            self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
-        
-            ## group logit? TODO add weight? 
-            distill_cos = (cosine.detach() + 1 )/2 
-            distill_cos = self.soft_max(distill_cos)
-            batch_logit_mean = torch.mm(M,distill_cos).squeeze()
-            
-            self.distill_buffer[lu] = batch_logit_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.distill_buffer[lu]
-
-            ## select random idx
-                        
-
-        # margin_scaler = (safe_norms - self.classwise_mean[label].unsqueeze(1)) / (self.batch_std+self.eps) # 66% between -1, 1
-        margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
-        norm_weight = (safe_norms - self.batch_mean) / (self.batch_std+self.eps)
-        norm_weight = torch.clip(norm_weight * self.h , -1, 1)
-        margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333 not for classwize 
-        margin_scaler = torch.clip(margin_scaler, -1, 1)
-
-
-
-        
-        m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
-        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
-        g_angular = self.m * margin_scaler * -1
-        # g_angular = self.m * 1
-        # import pdb ; pdb.set_trace()
-        m_arc = m_arc * g_angular
-        theta = cosine.acos()
-
-        theta_m = torch.clip(theta + m_arc, min=self.eps, max=math.pi-self.eps)
-        cosine = theta_m.cos()
-
-        m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
-        m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
-        g_add = self.m + (self.m * margin_scaler)
-        m_cos = m_cos * g_add
-        cosine = cosine - m_cos
-
-        # scale
-        scaled_cosine_m = cosine * self.s
-
-        ## distilation  
-        # import pdb ; pdb.set_trace()
-        mean_kl_loss = self.kl_loss(distill_cos,self.distill_buffer[label.squeeze()])
-
-        return scaled_cosine_m, norm_weight, mean_kl_loss
-
-
-
-## nomalize norm out 
-class AdaSFace(Module):
-    def __init__(self,
-                 embedding_size=512,
-                 classnum=70722,
-                 m=0.4,
-                 h=0.333,
-                 s=64.,
-                 t_alpha=1.0,
-                 ):
-        super(AdaSFace, self).__init__()
-        self.classnum = classnum
-        self.kernel = Parameter(torch.Tensor(embedding_size,classnum))
-        self.kernel2 = Parameter(torch.Tensor(embedding_size,classnum))
-
-        # initial kernel
-        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
-        self.kernel2.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
-        self.m = m 
-        self.eps = 1e-3
-        self.h = h
-        self.s = s
-
-        # ema prep
-        self.t_alpha = t_alpha
-        self.register_buffer('t', torch.zeros(1))
-        self.register_buffer('batch_mean', torch.ones(1)*(20))
-        self.register_buffer('batch_std', torch.ones(1)*100)
-
-
-    def forward(self, embbedings, norms, label):
-
-        kernel_norm = l2_norm(self.kernel,axis=0)
-        cosine = torch.mm(embbedings,kernel_norm)
-        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
-
-        kernel_norm2 = l2_norm(self.kernel2,axis=0)
-        cosine2 = torch.mm(embbedings,kernel_norm2)
-        cosine2 = cosine2.clamp(-1+self.eps, 1-self.eps) # for stability
-
-        safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
-        safe_norms = safe_norms.clone().detach()
-
-        # update batchmean batchstd
-        with torch.no_grad():
-            mean = safe_norms.mean().detach()
-            std = safe_norms.std().detach()
-            self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
-            self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
-
-        margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
-        margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333
-        margin_scaler = torch.clip(margin_scaler, -1, 1)
-        # ex: m=0.5, h:0.333
-        # range
-        #       (66% range)
-        #   -1 -0.333  0.333   1  (margin_scaler)
-        # -0.5 -0.166  0.166 0.5  (m * margin_scaler)
-        
-        #print('margin_s',margin_scaler.size())
-        #512 1
-        
-
-        # g_angular
-        m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
-        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
-
-        g_angular = self.m * margin_scaler * -1
-        m_arc = m_arc * g_angular
-        
-        
-        theta = cosine.acos()
-        theta_m = torch.clip(theta + m_arc, min=self.eps, max=math.pi-self.eps)
-        cosine = theta_m.cos()
-
-        ### for tail 
-        theta2 = cosine2.acos()
-        theta_m2 = torch.clip(theta2 + m_arc, min=self.eps, max=math.pi-self.eps)
-        cosine2 = theta_m2.cos()
-        
-        # g_additive
-        m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
-        m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
-
-        g_add = self.m + (self.m * margin_scaler)
-        m_cos = m_cos * g_add
-        cosine = cosine - m_cos
-
-        ### for tail 
-        g_add = self.m + (self.m * margin_scaler)
-        m_cos = m_cos * g_add
-        cosine2 = cosine2 - m_cos
-
-
-
-        # scale
-        scaled_cosine_m = cosine * self.s
-        scaled_cosine_2 = cosine2 * self.s
-
-        return scaled_cosine_m, scaled_cosine_2 , margin_scaler
 
 
 ####TODO 
@@ -365,9 +129,7 @@ class AdaWIndexFace(Module):
         # ema prep
         self.t_alpha = t_alpha
         self.register_buffer('t', torch.zeros(1))
-        # self.register_buffer('batch_mean', torch.ones(1)*(20))
         self.register_buffer('batch_mean', torch.ones(1)*(20))
-        # self.register_buffer('batch_std', torch.ones(1)*100)
         self.register_buffer('batch_std', torch.ones(1)*100)
 
 
@@ -915,8 +677,8 @@ class CWLFace(Module):
         # ema prep
         self.t_alpha = t_alpha
         self.register_buffer('t', torch.zeros(1))
-        self.register_buffer('batch_mean', torch.ones(1)*(10))
-        self.register_buffer('batch_std', torch.ones(1)*10)
+        self.register_buffer('batch_mean', torch.ones(1)*(20))
+        self.register_buffer('batch_std', torch.ones(1)*100)
 
         print('\n\AdaFace with the following property')
         print('self.m', self.m)
@@ -1277,8 +1039,8 @@ class AdaFace(Module):
         # ema prep
         self.t_alpha = t_alpha
         self.register_buffer('t', torch.zeros(1))
-        self.register_buffer('batch_mean', torch.ones(1)*(10))
-        self.register_buffer('batch_std', torch.ones(1)*10)
+        self.register_buffer('batch_mean', torch.ones(1)*(20))
+        self.register_buffer('batch_std', torch.ones(1)*100)
 
         print('\n\AdaFace with the following property')
         print('self.m', self.m)

@@ -7,7 +7,7 @@ import pandas as pd
 import evaluate_utils
 from dataset.image_folder_dataset import CustomImageFolderDataset
 from dataset.five_validation_dataset import FiveValidationDataset
-from dataset.record_dataset import AugmentRecordDataset,AugmentRecordDatasetWithLabelNum,AugmentRecordDatasetWithIdx
+from dataset.record_dataset import AugmentRecordDataset,AugmentRecordDatasetWithLabelNum,AugmentRecordDatasetWithIdx,AugmentRecordDatasetWithPickle
 
 
 class DataModule(pl.LightningDataModule):
@@ -30,7 +30,7 @@ class DataModule(pl.LightningDataModule):
         
         self.class_sample_num = kwargs['head'] == 'cwlnface' ##TODO
         self.class_sample_index = kwargs['head'] == 'adaface' ##TODO
-
+        
         
         concat_mem_file_name = os.path.join(self.data_root, self.val_data_path, 'concat_validation_memfile')
         self.concat_mem_file_name = concat_mem_file_name
@@ -45,7 +45,7 @@ class DataModule(pl.LightningDataModule):
         if not os.path.isfile(self.concat_mem_file_name):
             # create a concat memfile
             concat = []
-            for key in ['agedb_30', 'cfp_fp', 'lfw', 'cplfw', 'calfw']:
+            for key in ['agedb_30', 'cfp_fp', 'lfw', 'cplfw', 'calfw','African_test', 'Asian_test', 'Caucasian_test', 'Indian_test']:
                 np_array, issame = evaluate_utils.get_val_pair(path=os.path.join(self.data_root, self.val_data_path),
                                                                name=key,
                                                                use_memfile=False)
@@ -56,6 +56,7 @@ class DataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         # Assign Train/val split(s) for use in Dataloaders
+        
         if stage == 'fit' or stage is None:
             print('creating train dataset')
             self.train_dataset = train_dataset(self.data_root,
@@ -143,31 +144,39 @@ def train_dataset(data_root, train_data_path,
 
     if use_mxrecord:
         train_dir = os.path.join(data_root, train_data_path)
-        if class_sample_num:
+        # if class_sample_num:
+        #     train_dataset = AugmentRecordDatasetWithLabelNum(root_dir=train_dir,
+        #                              transform=train_transform,
+        #                              low_res_augmentation_prob=low_res_augmentation_prob,
+        #                              crop_augmentation_prob=crop_augmentation_prob,
+        #                              photometric_augmentation_prob=photometric_augmentation_prob,
+        #                              swap_color_channel=swap_color_channel,
+        #                              output_dir=output_dir)
+        # # elif True: ## TODO
+        # #     train_dataset = AugmentRecordDatasetWithPickle(root_dir=train_dir,
+        # #                              transform=train_transform,
+        # #                              low_res_augmentation_prob=low_res_augmentation_prob,
+        # #                              crop_augmentation_prob=crop_augmentation_prob,
+        # #                              photometric_augmentation_prob=photometric_augmentation_prob,
+        # #                              swap_color_channel=swap_color_channel,
+        # #                              output_dir=output_dir)
             
-            train_dataset = AugmentRecordDatasetWithLabelNum(root_dir=train_dir,
-                                     transform=train_transform,
-                                     low_res_augmentation_prob=low_res_augmentation_prob,
-                                     crop_augmentation_prob=crop_augmentation_prob,
-                                     photometric_augmentation_prob=photometric_augmentation_prob,
-                                     swap_color_channel=swap_color_channel,
-                                     output_dir=output_dir)
-        elif class_sample_index:
-            train_dataset = AugmentRecordDatasetWithIdx(root_dir=train_dir,
-                            transform=train_transform,
-                            low_res_augmentation_prob=low_res_augmentation_prob,
-                            crop_augmentation_prob=crop_augmentation_prob,
-                            photometric_augmentation_prob=photometric_augmentation_prob,
-                            swap_color_channel=swap_color_channel,
-                            output_dir=output_dir)
-        else:
-            train_dataset = AugmentRecordDataset(root_dir=train_dir,
-                                                 transform=train_transform,
-                                                 low_res_augmentation_prob=low_res_augmentation_prob,
-                                                 crop_augmentation_prob=crop_augmentation_prob,
-                                                 photometric_augmentation_prob=photometric_augmentation_prob,
-                                                 swap_color_channel=swap_color_channel,
-                                                 output_dir=output_dir)
+        # elif class_sample_index:
+        #     train_dataset = AugmentRecordDatasetWithIdx(root_dir=train_dir,
+        #                     transform=train_transform,
+        #                     low_res_augmentation_prob=low_res_augmentation_prob,
+        #                     crop_augmentation_prob=crop_augmentation_prob,
+        #                     photometric_augmentation_prob=photometric_augmentation_prob,
+        #                     swap_color_channel=swap_color_channel,
+        #                     output_dir=output_dir)
+        # else:
+        train_dataset = AugmentRecordDataset(root_dir=train_dir,
+                                                transform=train_transform,
+                                                low_res_augmentation_prob=low_res_augmentation_prob,
+                                                crop_augmentation_prob=crop_augmentation_prob,
+                                                photometric_augmentation_prob=photometric_augmentation_prob,
+                                                swap_color_channel=swap_color_channel,
+                                                output_dir=output_dir)
     else:
         train_dir = os.path.join(data_root, train_data_path, 'imgs')
         train_dataset = CustomImageFolderDataset(root=train_dir,
@@ -185,13 +194,18 @@ def train_dataset(data_root, train_data_path,
 def val_dataset(data_root, val_data_path, concat_mem_file_name):
     val_data = evaluate_utils.get_val_data(os.path.join(data_root, val_data_path))
     # theses datasets are already normalized with mean 0.5, std 0.5
-    age_30, cfp_fp, lfw, age_30_issame, cfp_fp_issame, lfw_issame, cplfw, cplfw_issame, calfw, calfw_issame = val_data
+    age_30, cfp_fp, lfw, age_30_issame, cfp_fp_issame, lfw_issame, cplfw, cplfw_issame, calfw, calfw_issame,african, african_issame,asian, asian_issame,caucasian, caucasian_issame,indian, indian_issame = val_data
     val_data_dict = {
         'agedb_30': (age_30, age_30_issame),
         "cfp_fp": (cfp_fp, cfp_fp_issame),
         "lfw": (lfw, lfw_issame),
         "cplfw": (cplfw, cplfw_issame),
         "calfw": (calfw, calfw_issame),
+        'African_test': (african, african_issame),
+        "Asian_test": (asian, asian_issame),
+        "Caucasian_test": (caucasian, caucasian_issame),
+        "Indian_test": (indian, indian_issame),
+
     }
     val_dataset = FiveValidationDataset(val_data_dict, concat_mem_file_name)
 
@@ -201,13 +215,17 @@ def val_dataset(data_root, val_data_path, concat_mem_file_name):
 def test_dataset(data_root, val_data_path, concat_mem_file_name):
     val_data = evaluate_utils.get_val_data(os.path.join(data_root, val_data_path))
     # theses datasets are already normalized with mean 0.5, std 0.5
-    age_30, cfp_fp, lfw, age_30_issame, cfp_fp_issame, lfw_issame, cplfw, cplfw_issame, calfw, calfw_issame = val_data
+    age_30, cfp_fp, lfw, age_30_issame, cfp_fp_issame, lfw_issame, cplfw, cplfw_issame, calfw, calfw_issame,african, african_issame,asian, asian_issame,caucasian, caucasian_issame,indian, indian_issame = val_data
     val_data_dict = {
         'agedb_30': (age_30, age_30_issame),
         "cfp_fp": (cfp_fp, cfp_fp_issame),
         "lfw": (lfw, lfw_issame),
         "cplfw": (cplfw, cplfw_issame),
         "calfw": (calfw, calfw_issame),
+        'African_test': (african, african_issame),
+        "Asian_test": (asian, asian_issame),
+        "Caucasian_test": (caucasian, caucasian_issame),
+        "Indian_test": (indian, indian_issame),
     }
     val_dataset = FiveValidationDataset(val_data_dict, concat_mem_file_name)
     return val_dataset

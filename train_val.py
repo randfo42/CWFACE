@@ -18,7 +18,9 @@ class Trainer(LightningModule):
 
         self.class_num = utils.get_num_class(self.hparams)
         print('classnum: {}'.format(self.class_num))
-               
+        
+        # self.sample_num = utils.get_sample_num(self.hparams)
+        # print('samples: {}'.format(self.sample_num))
 
         self.model = net.build_model(model_name=self.hparams.arch)
         
@@ -31,9 +33,12 @@ class Trainer(LightningModule):
                                      s=self.hparams.s,
                                      )
 
+        
         self.cross_entropy_loss = CrossEntropyLoss()
         self.cross_entropy_loss_non_redu = CrossEntropyLoss(reduction='none')
         self.class_sample_num = self.hparams.head=='cwlnface'
+        # self.class_sample_index = self.hparams.head=='adaface'
+ 
         self.relu = torch.nn.ReLU()
 
         if self.hparams.start_from_model_statedict:
@@ -49,6 +54,12 @@ class Trainer(LightningModule):
         else:
             if self.hparams.head == 'cwlmagface':
                 cos_thetas,normalized_norm = self.head(embeddings, norms, labels)
+            elif self.hparams.head == 'adawindexface' :
+                cos_thetas, max_cos_thetas,argmax_idx,norm_norms =self.head(embeddings, norms, labels)
+            elif self.hparams.head == 'adasface':
+                cos_thetas, cos_thetas2,norm_norms =self.head(embeddings, norms, labels)
+            elif self.hparams.head == 'utilface':
+                cos_thetas, norm_weight, mean_kl_loss =self.head(embeddings, norms, labels)
             else:
                 cos_thetas = self.head(embeddings, norms, labels)
         
@@ -59,7 +70,13 @@ class Trainer(LightningModule):
             labels[bad_grad.squeeze(-1)] = -100 # ignore_index
             
         if self.hparams.head == 'cwlmagface':
-             return cos_thetas, normalized_norm, embeddings, labels
+            return cos_thetas, normalized_norm, embeddings, labels
+        elif self.hparams.head == 'adawindexface' :
+            return cos_thetas, max_cos_thetas, norms, embeddings, labels, argmax_idx, norm_norms
+        elif self.hparams.head == 'adasface':
+            return cos_thetas, cos_thetas2, norms, embeddings, labels, norm_norms
+        elif self.hparams.head == 'utilface':
+            return cos_thetas, norms, embeddings, labels, norm_weight, mean_kl_loss
         else:
             return cos_thetas, norms, embeddings, labels
 
@@ -69,12 +86,78 @@ class Trainer(LightningModule):
         if self.class_sample_num:
             images, (labels,class_sample_num_) = batch
             cos_thetas, norms, embeddings, labels = self.forward(images, labels,class_sample_num_)
+        elif self.hparams.head == 'adawindexface' :
+            images, labels = batch
+            cos_thetas, max_cos_thetas, norms, embeddings, labels, argmax_idx, norm_norms = self.forward(images, labels)
+        elif self.hparams.head == 'adasface':
+            images, labels = batch
+            cos_thetas, cos_thetas2, norms, embeddings, labels, norm_norms = self.forward(images, labels)
+        elif self.hparams.head == 'utilface':
+            images, labels = batch
+            cos_thetas, norms, embeddings, labels, norm_weight, mean_kl_loss = self.forward(images, labels)
+        # elif self.class_sample_index:
+        #     images, (labels,index) = batch
+        #     cos_thetas, norms, embeddings, labels = self.forward(images, labels,index)
         else:
             images, labels = batch
             cos_thetas, norms, embeddings, labels = self.forward(images, labels)
 
-        if True:
-            loss_train = (0.1*self.relu(-(norms-30)) * self.cross_entropy_loss_non_redu(cos_thetas,labels)).mean()
+        max_norm = 22 
+        
+        if self.hparams.head == 'adawindexface':
+            
+            
+
+            if False:
+                norms = torch.clip(norms,max=max_norm)
+                loss_train = torch.where(norms<max_norm,self.cross_entropy_loss_non_redu(cos_thetas,labels).mean(),0)
+
+            elif False:
+                ## remove half or std1 
+                ## norm_norms version
+                ## h = 0.333 that is std 1
+                # print("norm_norms",norm_norms.shape)
+                # import pdb ; pdb.set_trace()
+                # self.hparams.h std1 
+                # 0 half 
+                loss_train = torch.where(norm_norms.squeeze() < 0.,
+                self.cross_entropy_loss_non_redu(cos_thetas,labels).mean(), torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean()
+
+                # print(loss_train)
+            elif False:
+                ## only MSE
+                loss_train = self.cross_entropy_loss(cos_thetas, labels) + ((norms-20)**2).mean()
+            elif True:
+                loss_train = torch.where(norm_norms.squeeze() < 0.,
+                self.cross_entropy_loss_non_redu(cos_thetas,labels).mean()  + 0.5*((norms-20)**2).mean() , torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean() 
+
+            else:
+                norms = torch.clip(norms,max=max_norm)
+                # loss_train = (0.5*self.relu(-(norms-max_norm))* ((torch.pow(0.9,norms))*self.cross_entropy_loss_non_redu(cos_thetas,labels)+
+                #                (0.1*torch.pow(0.9,max_norm-norms))*self.cross_entropy_loss_non_redu(max_cos_thetas,argmax_idx))).mean()
+                
+                # loss_train = (0.5*self.relu(-(norms-max_norm))* ((torch.pow(0.9,norms))*self.cross_entropy_loss_non_redu(cos_thetas,labels)+
+                #             (0.1*torch.pow(0.9,max_norm-norms))*self.cross_entropy_loss_non_redu(mWax_cos_thetas,argmax_idx))).mean()  ## ori 
+        
+                loss_train = (self.relu(-(norms-max_norm))* ((torch.pow(0.9,norms))*self.cross_entropy_loss_non_redu(cos_thetas,labels)+
+                            (0.1*torch.pow(0.9,max_norm-norms))*self.cross_entropy_loss_non_redu(max_cos_thetas,argmax_idx))).mean()
+
+        elif self.hparams.head == 'adasface':
+                
+            loss_train = self.cross_entropy_loss(cos_thetas, labels) + 0.5*torch.where(norm_norms.squeeze() < 0.,
+                self.cross_entropy_loss_non_redu(cos_thetas2,labels).mean(), torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean()
+
+            # print(cos_thetas2)
+        elif self.hparams.head == 'utilface':
+
+            # loss_train = (-(norm_weight-1)*self.cross_entropy_loss_non_redu(cos_thetas, labels)).mean()
+            # print(mean_kl_loss)
+            loss_train = self.cross_entropy_loss_non_redu(cos_thetas, labels).mean() + 0.1 *mean_kl_loss
+            # import pdb ; pdb.set_trace()
+        elif False:
+            ## for casia 0.1 
+            # import pdb ; pdb.set_trace()
+            loss_train = (0.5*self.relu(-(norms-25)) * self.cross_entropy_loss_non_redu(cos_thetas,labels)).mean()
         else:
             loss_train = self.cross_entropy_loss(cos_thetas, labels)
         
@@ -105,8 +188,11 @@ class Trainer(LightningModule):
         #loss_train = loss_train + max_norm_loss
         
         ##########
-        
-        lr = self.trainer.lr_schedulers[0]['scheduler'].get_last_lr()[0]
+        # sch = self.lr_schedulers()
+        # if isinstance(sch, torch.optim.lr_scheduler.ReduceLROnPlateau):
+        lr = self.optimizers().param_groups[0]['lr']
+        # else:
+        #     lr = self.trainer[0]['scheduler'].get_last_lr()[0]
 
         # log
         self.log('lr', lr, on_step=True, on_epoch=True, logger=True)
@@ -156,7 +242,7 @@ class Trainer(LightningModule):
 
         all_output_tensor, all_norm_tensor, all_target_tensor, all_dataname_tensor = self.gather_outputs(outputs)
 
-        dataname_to_idx = {"agedb_30": 0, "cfp_fp": 1, "lfw": 2, "cplfw": 3, "calfw": 4}
+        dataname_to_idx = {"agedb_30": 0, "cfp_fp": 1, "lfw": 2, "cplfw": 3, "calfw": 4,"African_test": 5, "Asian_test": 6, "Caucasian_test": 7, "Indian_test": 8}
         idx_to_dataname = {val: key for key, val in dataname_to_idx.items()}
         val_logs = {}
         for dataname_idx in all_dataname_tensor.unique():
@@ -182,6 +268,17 @@ class Trainer(LightningModule):
             # self.log(name=k, value=v, rank_zero_only=True)
             self.log(name=k, value=v)
 
+        sch = self.lr_schedulers()
+        if isinstance(sch, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            print("lr:::::::")
+            print(self.optimizers().param_groups[0]['lr'])
+            
+            # import pdb ; pdb.set_trace()
+            # sch.step(val_logs['val_acc'])
+            # sch.step(torch.stack(outputs).mean())
+            # print("---->",self.optimizers().param_groups[0]['lr'])
+
+
         return None
 
     def test_step(self, batch, batch_idx):
@@ -191,7 +288,7 @@ class Trainer(LightningModule):
 
         all_output_tensor, all_norm_tensor, all_target_tensor, all_dataname_tensor = self.gather_outputs(outputs)
 
-        dataname_to_idx = {"agedb_30": 0, "cfp_fp": 1, "lfw": 2, "cplfw": 3, "calfw": 4}
+        dataname_to_idx = {"agedb_30": 0, "cfp_fp": 1, "lfw": 2, "cplfw": 3, "calfw": 4,"African_test": 5, "Asian_test": 6, "Caucasian_test": 7, "Indian_test": 8}
         idx_to_dataname = {val: key for key, val in dataname_to_idx.items()}
         test_logs = {}
         for dataname_idx in all_dataname_tensor.unique():
@@ -264,11 +361,20 @@ class Trainer(LightningModule):
                                 lr=self.hparams.lr,
                                 momentum=self.hparams.momentum)
 
-        scheduler = lr_scheduler.MultiStepLR(optimizer,
+        if False:
+            ### 0.01 fail 
+            ## fail 0.1 static lr_scheduler.ReduceLROnPlateau(optimizer,patience=5,factor = self.hparams.lr_gamma ,threshold=0.01,cooldown =3)
+            scheduler = lr_scheduler.ReduceLROnPlateau(optimizer,patience=3,factor = self.hparams.lr_gamma ,threshold=0.1,cooldown =3)
+        else:
+            scheduler = lr_scheduler.MultiStepLR(optimizer,
                                              milestones=self.hparams.lr_milestones,
                                              gamma=self.hparams.lr_gamma)
 
-        return [optimizer], [scheduler]
+        
+
+        # return [optimizer], [scheduler]
+        # return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "train_loss"}
+        return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
     def split_parameters(self, module):
         params_decay = []

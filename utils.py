@@ -2,7 +2,8 @@ import os
 import pickle
 import torch
 import torch.distributed as dist
-
+import mxnet as mx
+import numpy as np
 
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""
@@ -97,13 +98,13 @@ def get_num_class(hparams):
     if hparams.custom_num_class != -1:
         return hparams.custom_num_class
 
-    if 'faces_emore' in hparams.train_data_path.lower() or 'ms1m' in hparams.train_data_path.lower():
-        # MS1MV2
-        class_num = 70722 if hparams.train_data_subset else 85742
-    elif 'ms1m-retinaface-t1' in hparams.train_data_path.lower():
+    if 'ms1m-retinaface-t1' in hparams.train_data_path.lower():
         # MS1MV3
         assert not hparams.train_data_subset
         class_num = 93431
+    elif 'faces_emore' in hparams.train_data_path.lower() or 'ms1m' in hparams.train_data_path.lower():
+        # MS1MV2
+        class_num = 70722 if hparams.train_data_subset else 85742
     elif 'faces_vgg_112x112' in hparams.train_data_path.lower():
         # VGGFace2
         assert not hparams.train_data_subset
@@ -125,3 +126,20 @@ def get_num_class(hparams):
         raise ValueError('Check your train_data_path', hparams.train_data_path)
 
     return class_num
+
+
+def get_sample_num(hparams):
+    ## get number of samples TODO check
+
+    data_root = hparams['data_root']
+    path_imgrec = os.path.join(data_root, 'train.rec')
+    path_imgidx = os.path.join(data_root, 'train.idx')
+    path_imglst = os.path.join(data_root, 'train.lst')
+    record = mx.recordio.MXIndexedRecordIO(path_imgidx, path_imgrec, 'r')
+    s = record.read_idx(0)
+    header, _ = mx.recordio.unpack(s)
+
+    if header.flag > 0:
+        return len(np.array(range(1, int(header.label[0]))))
+    else:
+        return len(np.array(list(record.keys)))

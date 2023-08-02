@@ -265,7 +265,7 @@ def get_blocks(num_layers):
 
 
 class Backbone(Module):
-    def __init__(self, input_size, num_layers, mode='ir'):
+    def __init__(self, input_size, num_layers, mode='ir', norm=False):
         """ Args:
             input_size: input_size of backbone
             num_layers: num_layers of backbone
@@ -278,6 +278,7 @@ class Backbone(Module):
             "num_layers should be 18, 34, 50, 100 or 152"
         assert mode in ['ir', 'ir_se'], \
             "mode should be ir or ir_se"
+        self.norm = norm
         self.input_layer = Sequential(Conv2d(3, 64, (3, 3), 1, 1, bias=False),
                                       BatchNorm2d(64), PReLU(64))
         blocks = get_blocks(num_layers)
