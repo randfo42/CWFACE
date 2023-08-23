@@ -145,18 +145,23 @@ class utilFace(Module):
         self.register_buffer('classwise_mean', torch.ones(classnum)*(20))
         self.register_buffer('batch_std', torch.ones(1)*(10))
         self.soft_max = nn.Softmax(dim=1)
+        # self.soft_max = nn.Softmax()
         self.register_buffer('distill_buffer', self.soft_max(torch.ones(classnum,classnum)*0.5))
-        self.kl_loss = nn.KLDivLoss(reduction="batchmean")
-
+        self.kl_loss = nn.KLDivLoss(reduction="none")
+        
+        self.linear = torch.nn.Linear(embedding_size, 1)
+        
 
         ### KL sampling 
-        
+        self.num_sample = self.classnum * 0.01 # about 100 ~ 
+
 
         print('\n\CWFace with the following property')
         print('self.m', self.m)
         print('self.h', self.h)
         print('self.s', self.s)
         print('self.t_alpha', self.t_alpha)
+
 
 
     def forward(self, embbedings, norms, label):
@@ -167,15 +172,17 @@ class utilFace(Module):
 
         
         safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
-        
+        safe_norms = safe_norms.clone().detach()
         
 
-       
+        distill_cos = (cosine.detach() + 1 )/2 
+        distill_cos = self.soft_max(distill_cos)
+
         # update batchmean batchstd
         with torch.no_grad():
 
             lu = label.unique()
-            ## group by mean! 
+            # ## group by mean! 
             M = torch.zeros(self.classnum,label.size()[0]).cuda()
             M[label.squeeze(),torch.arange(label.size()[0])] = 1
             M = torch.nn.functional.normalize(M, p=1, dim=1)
@@ -189,50 +196,96 @@ class utilFace(Module):
             self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
         
             ## group logit? TODO add weight? 
-            distill_cos = (cosine.detach() + 1 )/2 
-            distill_cos = self.soft_max(distill_cos)
             batch_logit_mean = torch.mm(M,distill_cos).squeeze()
             
-            self.distill_buffer[lu] = batch_logit_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.distill_buffer[lu]
+            # self.distill_buffer[lu] = batch_logit_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.distill_buffer[lu]
+            
+            ## topk with cosine value
+            ## TODO is random value with origin label
 
-            ## select random idx
-                        
+            # cos = distill_cos.clone().detach()
+            # cos[torch.arange(label.size()[0]), label.squeeze()] = 2.0
+            # distill_idx = torch.topk(cos, k=int(self.num_sample))[1]
+            uniform = torch.ones((label.size()[0])).cuda()
+            uniform = uniform/uniform.sum()
+            
+            
 
-        # margin_scaler = (safe_norms - self.classwise_mean[label].unsqueeze(1)) / (self.batch_std+self.eps) # 66% between -1, 1
+        
         margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
-        norm_weight = (safe_norms - self.batch_mean) / (self.batch_std+self.eps)
-        norm_weight = torch.clip(norm_weight * self.h , -1, 1)
+        # norm_weight = (safe_norms - self.batch_mean) / (self.batch_std+self.eps)
+        # norm_weight = torch.clip(norm_weight * self.h , -1, 1)
         margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333 not for classwize 
         margin_scaler = torch.clip(margin_scaler, -1, 1)
 
+        ##class-wize static 
+        cw_margin_scaler = (safe_norms - self.classwise_mean[label].unsqueeze(1)) / (self.batch_std+self.eps) # 66% between -1, 1
+        cw_margin_scaler = torch.clip(cw_margin_scaler, -1, 1) * self.h
 
-
+        cw_cosine = cosine.clone()
         
         m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
         m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
         g_angular = self.m * margin_scaler * -1
         # g_angular = self.m * 1
         # import pdb ; pdb.set_trace()
-        m_arc = m_arc * g_angular
+        origin_m_arc = m_arc * g_angular
         theta = cosine.acos()
 
-        theta_m = torch.clip(theta + m_arc, min=self.eps, max=math.pi-self.eps)
+        theta_m = torch.clip(theta + origin_m_arc, min=self.eps, max=math.pi-self.eps)
         cosine = theta_m.cos()
+
+        ## CW
+        g_angular_cw = self.m * cw_margin_scaler * -1
+        cw_m_arc = m_arc * g_angular_cw
+        cw_theta = cw_cosine.acos()
+
+        cw_theta_m = torch.clip(cw_theta + cw_m_arc, min=self.eps, max=math.pi-self.eps)
+        cw_cosine = cw_theta_m.cos()
+        
+        # print("first",(cosine == cw_cosine).sum()/cw_cosine.reshape(-1).shape[0])
+
+        ######
+
 
         m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
         m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
+
         g_add = self.m + (self.m * margin_scaler)
-        m_cos = m_cos * g_add
-        cosine = cosine - m_cos
+        origin_m_cos = m_cos * g_add
+        cosine = cosine - origin_m_cos
+
+        # ## CW 
+        cw_g_add = self.m + (self.m * cw_margin_scaler)
+        cw_m_cos = m_cos * cw_g_add
+        cw_cosine = cw_cosine - cw_m_cos
+
+
+
 
         # scale
         scaled_cosine_m = cosine * self.s
+        scaled_cw_cosine_m = cw_cosine * self.s
+
+        # print("last",(scaled_cosine_m == scaled_cw_cosine_m).sum()/scaled_cosine_m.reshape(-1).shape[0])
 
         ## distilation  
         # import pdb ; pdb.set_trace()
-        mean_kl_loss = self.kl_loss(distill_cos,self.distill_buffer[label.squeeze()])
 
-        return scaled_cosine_m, norm_weight, mean_kl_loss
+        # origin 
+        # mean_kl_loss = (((1-margin_scaler)/2)*self.kl_loss(distill_cos,self.distill_buffer[label.squeeze()])).mean()
+        ## select random idx
+         
+        # mean_kl_loss = self.kl_loss(self.soft_max(torch.gather(distill_cos, 1, distill_idx)),self.soft_max(torch.gather(self.distill_buffer[label.squeeze()], 1, distill_idx)))
+        
+
+        mean_kl_loss = torch.where(safe_norms<=self.batch_mean,self.kl_loss(safe_norms.squeeze()/safe_norms.sum(),uniform),torch.tensor(0, dtype=safe_norms.dtype).to(safe_norms.device)).mean()
+        # print(mean_kl_loss.shape)
+        # mean_kl_loss = self.kl_loss(self.soft_max(safe_norms.squeeze()),uniform).mean()
+
+        # return scaled_cosine_m, norm_weight, mean_kl_loss
+        return scaled_cosine_m, cw_margin_scaler, mean_kl_loss, scaled_cw_cosine_m
+        # return scaled_cosine_m, cw_margin_scaler, None, None
 
 
 

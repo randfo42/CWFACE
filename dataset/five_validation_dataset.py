@@ -20,7 +20,7 @@ class FiveValidationDataset(Dataset):
         cplfw: 3
         calfw: 4
         '''
-        self.dataname_to_idx = {"agedb_30": 0, "cfp_fp": 1, "lfw": 2, "cplfw": 3, "calfw": 4}
+        self.dataname_to_idx = {"agedb_30": 0, "cfp_fp": 1, "lfw": 2, "cplfw": 3, "calfw": 4,"African_test": 5, "Asian_test": 6, "Caucasian_test": 7, "Indian_test": 8}
 
         self.val_data_dict = val_data_dict
         # concat all dataset
@@ -37,7 +37,7 @@ class FiveValidationDataset(Dataset):
             all_issame.append(dup_issame)
             all_dataname.append([self.dataname_to_idx[key]] * len(imgs))
             key_orders.append(key)
-        assert key_orders == ['agedb_30', 'cfp_fp', 'lfw', 'cplfw', 'calfw']
+        assert key_orders == ['agedb_30', 'cfp_fp', 'lfw', 'cplfw', 'calfw','African_test', 'Asian_test', 'Caucasian_test', 'Indian_test']
 
         if isinstance(all_imgs[0], np.memmap):
             self.all_imgs = evaluate_utils.read_memmap(concat_mem_file_name)

@@ -59,7 +59,7 @@ class Trainer(LightningModule):
             elif self.hparams.head == 'adasface':
                 cos_thetas, cos_thetas2,norm_norms =self.head(embeddings, norms, labels)
             elif self.hparams.head == 'utilface':
-                cos_thetas, norm_weight, mean_kl_loss =self.head(embeddings, norms, labels)
+                cos_thetas, norm_weight, mean_kl_loss,scaled_cw_cosine_m =self.head(embeddings, norms, labels)
             else:
                 cos_thetas = self.head(embeddings, norms, labels)
         
@@ -76,7 +76,7 @@ class Trainer(LightningModule):
         elif self.hparams.head == 'adasface':
             return cos_thetas, cos_thetas2, norms, embeddings, labels, norm_norms
         elif self.hparams.head == 'utilface':
-            return cos_thetas, norms, embeddings, labels, norm_weight, mean_kl_loss
+            return cos_thetas, norms, embeddings, labels, norm_weight, mean_kl_loss,scaled_cw_cosine_m
         else:
             return cos_thetas, norms, embeddings, labels
 
@@ -94,7 +94,7 @@ class Trainer(LightningModule):
             cos_thetas, cos_thetas2, norms, embeddings, labels, norm_norms = self.forward(images, labels)
         elif self.hparams.head == 'utilface':
             images, labels = batch
-            cos_thetas, norms, embeddings, labels, norm_weight, mean_kl_loss = self.forward(images, labels)
+            cos_thetas, norms, embeddings, labels, norm_weight, mean_kl_loss, scaled_cw_cosine_m = self.forward(images, labels)
         # elif self.class_sample_index:
         #     images, (labels,index) = batch
         #     cos_thetas, norms, embeddings, labels = self.forward(images, labels,index)
@@ -150,10 +150,23 @@ class Trainer(LightningModule):
             # print(cos_thetas2)
         elif self.hparams.head == 'utilface':
 
+            # weight_by_epoch = self.current_epoch/self.hparams.epochs
+            weight_by_epoch = 1 if self.current_epoch > 12 else 0
             # loss_train = (-(norm_weight-1)*self.cross_entropy_loss_non_redu(cos_thetas, labels)).mean()
             # print(mean_kl_loss)
-            loss_train = self.cross_entropy_loss_non_redu(cos_thetas, labels).mean() + 0.1 *mean_kl_loss
+            loss_train = self.cross_entropy_loss_non_redu(cos_thetas, labels).mean() + weight_by_epoch * 1* mean_kl_loss
+            # loss_train = (1-weight_by_epoch)*self.cross_entropy_loss_non_redu(cos_thetas, labels).mean() + 
+            # weight_by_epoch * (self.relu(-norm_weight) *self.cross_entropy_loss_non_redu(scaled_cw_cosine_m, labels)).mean()
+            
+            # loss_train = (1-weight_by_epoch)*self.cross_entropy_loss_non_redu(cos_thetas, labels).mean() + \
+            # weight_by_epoch * \
+            # torch.where(norm_weight.squeeze() < 0.,
+            # self.cross_entropy_loss_non_redu(scaled_cw_cosine_m, labels).mean(), torch.tensor(0, dtype=norm_weight.dtype).to(norm_weight.device)).mean()
             # import pdb ; pdb.set_trace()
+
+            # loss_train = self.cross_entropy_loss_non_redu(cos_thetas, labels).mean()
+
+
         elif False:
             ## for casia 0.1 
             # import pdb ; pdb.set_trace()
@@ -197,6 +210,7 @@ class Trainer(LightningModule):
         # log
         self.log('lr', lr, on_step=True, on_epoch=True, logger=True)
         self.log('train_loss', loss_train, on_step=True, on_epoch=True, logger=True)
+        self.log('batch_norm_mean', self.head.batch_mean.mean(), on_step=True, on_epoch=True, logger=True)
 
         return loss_train
 
