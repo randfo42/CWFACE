@@ -105,7 +105,31 @@ def build_head(head_type,
                 m=m,
                 s=s,
                 )
- 
+    elif head_type == 'fraface':
+        head = fraFace(embedding_size=embedding_size,
+                classnum=class_num,
+                m=m,
+                s=s,
+                )
+    elif head_type == 'fratface':
+        head = fratFace(embedding_size=embedding_size,
+                classnum=class_num,
+                m=m,
+                s=s,
+                )
+    elif head_type == 'qualface':
+        head = qualFace(embedding_size=embedding_size,
+                classnum=class_num,
+                m=m,
+                s=s,
+                )
+    elif head_type == 'ufoface':
+        head = UfoFace(embedding_size=embedding_size,
+                classnum=class_num,
+                m=m,
+                s=s,
+                )
+
     else:
         raise ValueError('not a correct head type', head_type)
     return head
@@ -114,6 +138,601 @@ def l2_norm(input,axis=1):
     norm = torch.norm(input,2,axis,True)
     output = torch.div(input, norm)
     return output
+
+def remove_common_elements(target, ref):
+    target_sorted = target.sort().values
+    ref_sorted = ref.sort().values
+    matches = (target_sorted.unsqueeze(1) != ref_sorted.unsqueeze(0)).nonzero()
+    fin = target_sorted[matches[:, 0]]
+    # Removing potential duplicate matches
+    return torch.unique(fin)
+
+
+class UfoFace(Module):
+    def __init__(self,
+                 embedding_size=512,
+                 classnum=70722,
+                 m=0.4,
+                 h=0.333,
+                 s=64.,
+                 t_alpha=1.0,
+                 ):
+        super(UfoFace, self).__init__()
+        self.classnum = classnum
+        self.kernel = Parameter(torch.Tensor(embedding_size,classnum))
+        # self.proj_head = Parameter(torch.Tensor(embedding_size,embedding_size))
+        # self.proj_head2 = Parameter(torch.Tensor(embedding_size,embedding_size))
+        # self.relu = torch.nn.ReLU()
+
+        # initial kernel
+        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        # self.proj_head.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        # self.proj_head2.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.m = m 
+        self.eps = 1e-3
+        self.h = h
+        self.s = s
+
+        # ema prep
+        self.t_alpha = t_alpha
+        self.register_buffer('t', torch.zeros(1))
+        self.register_buffer('batch_mean', torch.ones(1)*(10))
+        self.register_buffer('batch_std', torch.ones(1)*10)
+
+        self.ood_feature_mem = torch.zeros(0).cuda()
+        # self.ood_feature_norm = torch.zeros(0).cuda()
+        self.ood_feature_time = torch.zeros(0).cuda()
+        self.queue_size = 300  #hyper-param
+
+        print('\n\AdaFace with the following property')
+        print('self.m', self.m)
+        print('self.h', self.h)
+        print('self.s', self.s)
+        print('self.t_alpha', self.t_alpha)
+
+    def update(self, feature, norm):
+        
+        ## feature tensor 1..., embedding
+        self.ood_feature_mem = torch.cat([feature,self.ood_feature_mem],dim=0)
+        # self.ood_feature_norm = torch.cat([feature,self.ood_feature_norm],dim=0)
+
+        self.ood_feature_time =   self.ood_feature_time + 1 
+        self.ood_feature_time = torch.cat([torch.ones(feature.shape[0]).cuda(),self.ood_feature_time],dim=0)
+
+        over_size = self.ood_feature_mem.shape[0] - self.queue_size
+        if over_size > 0:
+            self.ood_feature_mem = self.ood_feature_mem[over_size:]
+            # self.ood_feature_norm = self.ood_feature_norm[over_size:]
+            self.ood_feature_time = self.ood_feature_time[over_size:]
+        
+        time_idx = torch.where(self.ood_feature_time>1000,False,True)##hyperparam
+
+        self.ood_feature_mem = self.ood_feature_mem[time_idx]
+        self.ood_feature_time = self.ood_feature_time[time_idx]
+        # self.ood_feature_norm = self.ood_feature_norm[time_idx]
+
+
+    def forward(self, embbedings, norms, label):
+
+        kernel_norm = l2_norm(self.kernel,axis=0)
+
+        cosine = torch.mm(embbedings,kernel_norm)
+        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
+
+        
+
+        safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
+        safe_norms = safe_norms.clone().detach()
+
+        # update batchmean batchstd
+        with torch.no_grad():
+            mean = safe_norms.mean().detach()
+            std = safe_norms.std().detach()
+            self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
+            self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
+
+
+
+        margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
+        margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333
+        margin_scaler = torch.clip(margin_scaler, -1, 1)
+        # ex: m=0.5, h:0.333
+        # range
+        #       (66% range)
+        #   -1 -0.333  0.333   1  (margin_scaler)
+        # -0.5 -0.166  0.166 0.5  (m * margin_scaler)
+        
+        #print('margin_s',margin_scaler.size())
+        #512 1
+        
+        with torch.no_grad():   
+            ## check OOD and 
+            # generate mask for OOD sample ?????
+
+            max_cos = torch.max(cosine,dim=1,keepdim=True)[0]
+            # print(max_cos.shape)
+            cond = torch.where((max_cos<0.5)&(margin_scaler>0.2),True,False)
+            # print("emb cond",embbedings[cond.squeeze()].shape)
+            self.update(embbedings[cond.squeeze()],norms[cond.squeeze()])
+
+        ##TODO
+        # print(self.ood_feature_mem.shape[0])
+
+        # proj=(torch.mm(self.relu(embbedings),self.proj_head))
+        # proj_t=(torch.mm(self.relu(embbedings*norms),self.proj_head))
+        # proj=(torch.mm(self.relu(proj_t),self.proj_head2))
+
+        if self.ood_feature_mem.shape[0] >0:
+            # print("ood_shape",self.ood_feature_mem.shape)
+
+            # batch, 300 
+            # Q,R = torch.linalg.qr(self.ood_feature_mem.T)
+            # OOD_sep = torch.mm(embbedings*norms,Q.T)
+            OOD_sep = torch.mm(embbedings,self.ood_feature_mem.T)
+            OOD_sep = OOD_sep.clamp(-1+self.eps, 1-self.eps)
+            OOD_sep = OOD_sep.unsqueeze(2)
+            ood_feature_mem_expanded = self.ood_feature_mem.unsqueeze(0)
+
+            # 512 300 512
+            OOD_proj = OOD_sep * ood_feature_mem_expanded
+
+            # 512 300 512 
+            # wo_proj_direction = (embbedings*norms).unsqueeze(1) - OOD_proj
+            # print(Q.shape)
+            # print(embbedings.shape)
+            # wo_proj_direction = (embbedings*norms - (embbedings*norms)@Q@Q.T).clone().detach()
+
+            OOD_proj_loss = torch.sum(torch.abs(OOD_proj),dim=2)[~cond.squeeze()].mean()
+            # print(torch.sum(OOD_proj - proj,dim=2))
+            # OOD_proj_loss = (wo_proj_direction - proj)**2
+
+            # print(OOD_proj_loss.shape)
+
+        else:
+            OOD_proj_loss = 0
+            
+
+
+        # g_angular
+        m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
+        
+        #print('m_arc',m_arc.size())
+        #512 10572
+
+        g_angular = self.m * margin_scaler * -1
+        
+        
+        
+        m_arc = m_arc * g_angular
+        theta = cosine.acos()
+        theta_m = torch.clip(theta + m_arc, min=self.eps, max=math.pi-self.eps)
+        cosine = theta_m.cos()
+
+        # g_additive
+        m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
+        g_add = self.m + (self.m * margin_scaler)
+        m_cos = m_cos * g_add
+        cosine = cosine - m_cos
+
+        # scale
+        scaled_cosine_m = cosine * self.s
+        return scaled_cosine_m, cond, OOD_proj_loss
+
+
+
+### pred quality utilize feature norm and long-tail
+class qualFace(Module):
+    def __init__(self,
+                 embedding_size=512,
+                 classnum=70722,
+                 m=0.4,
+                 h=0.333,
+                 s=64.,
+                 t_alpha=1.0,
+                 ):
+        super(qualFace, self).__init__()
+        self.classnum = classnum
+        self.kernel = Parameter(torch.Tensor(embedding_size,classnum))
+
+        # initial kernel
+        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.m = m 
+        self.eps = 1e-3
+        self.h = h
+        self.s = s
+
+        # ema prep
+        self.t_alpha = t_alpha
+        self.register_buffer('t', torch.zeros(1))
+
+        self.register_buffer('batch_mean', torch.ones(1)*(20))
+        self.register_buffer('classwise_mean', torch.ones(classnum)*(20))
+        self.register_buffer('batch_std', torch.ones(1)*(10))
+        self.soft_max = nn.Softmax(dim=1)
+        # self.soft_max = nn.Softmax()
+        
+        self.qual_linear = torch.nn.Linear(embedding_size, 1)
+        self.dist_linear = torch.nn.Linear(embedding_size, 1)
+        self.sigmoid = nn.Sigmoid()
+        
+
+        ### KL sampling 
+        self.num_sample = self.classnum * 0.01 # about 100 ~ 
+
+
+        print('\n\CWFace with the following property')
+        print('self.m', self.m)
+        print('self.h', self.h)
+        print('self.s', self.s)
+        print('self.t_alpha', self.t_alpha)
+
+
+
+    def forward(self, embbedings, norms, label):
+
+        kernel_norm = l2_norm(self.kernel,axis=0)
+        cosine = torch.mm(embbedings,kernel_norm)
+        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
+
+        
+        safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
+        safe_norms = safe_norms.clone().detach()
+        
+        distill_cos = cosine.clone()
+        distill_cos = self.soft_max(distill_cos)
+
+        # update batchmean batchstd
+        with torch.no_grad():
+
+            lu = label.unique()
+            # ## group by mean! 
+            M = torch.zeros(self.classnum,label.size()[0]).cuda()
+            M[label.squeeze(),torch.arange(label.size()[0])] = 1
+            M = torch.nn.functional.normalize(M, p=1, dim=1)
+            
+            batch_group_mean = torch.mm(M,safe_norms).squeeze().detach()
+            mean = safe_norms.mean().detach()
+            std = safe_norms.std().detach()
+                        
+            self.classwise_mean[lu] = batch_group_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.classwise_mean[lu]
+            self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
+            self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
+
+        
+        margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
+        
+        margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333 not for classwize 
+        margin_scaler = torch.clip(margin_scaler, -1, 1)
+
+        ##class-wize static 
+        cw_margin_scaler = (safe_norms - self.classwise_mean[label].unsqueeze(1)) / (self.batch_std+self.eps) # 66% between -1, 1
+        cw_margin_scaler = torch.clip(cw_margin_scaler, -1, 1) * self.h
+
+
+        # qality_est = self.qual_linear(embbedings)
+
+        qality_cos = cosine.clone().detach()
+
+        mask = torch.ones_like(qality_cos, dtype=torch.bool)
+        mask[torch.arange(qality_cos.shape[0]), label] = False
+        masked_tensor = torch.where(mask, qality_cos, torch.tensor(-1,dtype=qality_cos.dtype).to(qality_cos.device))
+        max_value_indices = torch.argmax(masked_tensor, dim=1)
+
+        # q_est_loss = (qality_est - ((cw_margin_scaler+1))* (qality_cos[torch.arange(label.size()[0]),label]/(qality_cos[torch.arange(label.size()[0]),max_value_indices]+self.eps)))**2
+
+
+        qality_est = self.qual_linear(embbedings)
+        dist_est = self.dist_linear(embbedings)
+
+        q_est_loss = (self.sigmoid(qality_est) - ((cw_margin_scaler+1)/2))**2
+        # dist_est_loss = (self.sigmoid(dist_est)- ((((margin_scaler+1)/2)/((cw_margin_scaler+2)))))**2
+        dist_est_loss = (self.sigmoid(dist_est) - qality_cos[torch.arange(label.size()[0]),label]/(qality_cos[torch.arange(label.size()[0]),max_value_indices]+self.eps))**2
+
+        m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
+        g_angular = self.m * margin_scaler * -1
+        origin_m_arc = m_arc * g_angular
+        theta = cosine.acos()
+
+        theta_m = torch.clip(theta + origin_m_arc, min=self.eps, max=math.pi-self.eps)
+        cosine = theta_m.cos()
+
+        ######
+        m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
+
+        g_add = self.m + (self.m * margin_scaler)
+        origin_m_cos = m_cos * g_add
+        cosine = cosine - origin_m_cos
+
+        
+
+        # scale
+        scaled_cosine_m = cosine * self.s
+
+
+        return scaled_cosine_m, q_est_loss, dist_est_loss
+
+
+### freeze version, add weight dim 
+class fratFace(Module):
+    def __init__(self,
+                 embedding_size=512,
+                 classnum=70722,
+                 m=0.4,
+                 h=0.333,
+                 s=64.,
+                 t_alpha=1.0,
+                 ):
+        super(fratFace, self).__init__()
+        self.classnum = classnum
+        ## 0 normal 1 class specific
+        self.kernel = Parameter(torch.Tensor(embedding_size,2,classnum))
+
+        # initial kernel
+        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.m = m 
+        self.eps = 1e-3
+        self.h = h
+        self.s = s
+
+        # ema prep
+        self.t_alpha = t_alpha
+        self.register_buffer('t', torch.zeros(1))
+
+        self.register_buffer('batch_mean', torch.ones(1)*(20))
+        self.register_buffer('classwise_mean', torch.ones(classnum)*(20))
+        self.register_buffer('batch_std', torch.ones(1)*(10))
+        self.soft_max = nn.Softmax(dim=1)        
+
+        ### sampling 
+        self.num_sample = int(self.classnum*0.2)  
+
+
+        print('\n fraFace with the following property')
+        print('self.m', self.m)
+        print('self.h', self.h)
+        print('self.s', self.s)
+        print('self.t_alpha', self.t_alpha)
+
+
+
+    def forward(self, embbedings, norms, label):
+
+        kernel_norm = l2_norm(self.kernel,axis=0)
+        # cosine = torch.mm(embbedings,kernel_norm)
+
+        # print(embbedings.shape)
+        # print(kernel_norm.shape)
+        # import pdb ; pdb.set_trace()
+
+        # cosine = torch.matmul(embbedings,kernel_norm)
+        cosine = torch.einsum('be,etc->btc',embbedings,kernel_norm)
+
+        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
+
+        safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
+        safe_norms = safe_norms.clone().detach()
+
+        # mask = torch.ones_like(self.kernel, dtype=torch.bool,device=self.kernel.device)
+        # mask[:,1,:] = False
+        # mask[torch.arange(label.size()[0]),1,label.squeeze()] = True
+        # hook_ = self.kernel.register_hook(lambda grad: grad * mask.float())
+
+        # update batchmean batchstd
+        with torch.no_grad():
+            
+            lu = label.unique()
+            # for idx in freaze_idx:
+            #     self.kernel[:,idx].requires_grad = False
+            #     print(self.kernel[:,idx].requires_grad)
+
+            # ## group by mean! 
+            M = torch.zeros(self.classnum,label.size()[0]).cuda()
+            M[label.squeeze(),torch.arange(label.size()[0])] = 1
+            M = torch.nn.functional.normalize(M, p=1, dim=1)
+            
+            batch_group_mean = torch.mm(M,safe_norms).squeeze().detach()
+            mean = safe_norms.mean().detach()
+            std = safe_norms.std().detach()
+                        
+            self.classwise_mean[lu] = batch_group_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.classwise_mean[lu]
+            self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
+            self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
+        
+            ### sampling...? 
+
+            # cos_cond = (cosine[torch.arange(label.size()[0]),label]>0.5).unsqueeze(1).expand_as(distill_cos)
+            # cond = torch.where(cos_cond,distill_cos.detach(),torch.tensor(0, dtype=distill_cos.dtype).to(distill_cos.device))
+
+
+        margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
+        # norm_weight = (safe_norms - self.batch_mean) / (self.batch_std+self.eps)
+        # norm_weight = torch.clip(norm_weight * self.h , -1, 1)
+        margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333 not for classwize 
+        margin_scaler = torch.clip(margin_scaler, -1, 1)
+
+        ##class-wize static 
+        cw_margin_scaler = (safe_norms - self.classwise_mean[label].unsqueeze(1)) / (self.batch_std+self.eps) # 66% between -1, 1
+        cw_margin_scaler = torch.clip(cw_margin_scaler, -1, 1) * self.h
+
+        w1_cosine = cosine[:,0,:]
+        # B C  
+        w2_cosine = cosine[:,0,:].clone()
+        w2_cosine[torch.arange(label.size()[0]),label.squeeze()] = cosine[torch.arange(label.size()[0]),1,label.squeeze()]
+
+        mask = torch.zeros_like(w2_cosine, dtype=torch.bool,device=w2_cosine.device)
+        mask[torch.arange(label.size()[0]),label.squeeze()] = True
+        hook_ = w2_cosine.register_hook(lambda grad: grad * mask)
+
+
+        ## W1 #####################################
+        m_arc = torch.zeros(label.size()[0], w1_cosine.size()[1], device=w1_cosine.device)
+        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
+        g_angular = self.m * margin_scaler * -1
+        
+
+        # import pdb ; pdb.set_trace()
+        origin_m_arc = m_arc * g_angular
+        theta = w1_cosine.acos()
+
+        theta_m = torch.clip(theta + origin_m_arc, min=self.eps, max=math.pi-self.eps)
+        w1_cosine = theta_m.cos()
+
+
+        m_cos = torch.zeros(label.size()[0], w1_cosine.size()[1], device=w1_cosine.device)
+        m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
+
+        g_add = self.m + (self.m * margin_scaler)
+        origin_m_cos = m_cos * g_add
+        w1_cosine = w1_cosine - origin_m_cos
+
+        # scale
+        scaled_cosine_m = w1_cosine * self.s
+
+
+        ## W2 ##########################################
+        theta2 = w2_cosine.acos()
+        theta_m2 = torch.clip(theta2 + origin_m_arc, min=self.eps, max=math.pi-self.eps)
+        w2_cosine = theta_m2.cos()
+
+        w2_cosine = w2_cosine - origin_m_cos
+
+        # scale
+        scaled_cosine_m2 = w2_cosine * self.s
+
+
+        return scaled_cosine_m,scaled_cosine_m2, cw_margin_scaler ,hook_
+
+
+### freeze version
+class fraFace(Module):
+    def __init__(self,
+                 embedding_size=512,
+                 classnum=70722,
+                 m=0.4,
+                 h=0.333,
+                 s=64.,
+                 t_alpha=1.0,
+                 ):
+        super(fraFace, self).__init__()
+        self.classnum = classnum
+        self.kernel = Parameter(torch.Tensor(embedding_size,classnum))
+
+        # initial kernel
+        self.kernel.data.uniform_(-1, 1).renorm_(2,1,1e-5).mul_(1e5)
+        self.m = m 
+        self.eps = 1e-3
+        self.h = h
+        self.s = s
+
+        # ema prep
+        self.t_alpha = t_alpha
+        self.register_buffer('t', torch.zeros(1))
+
+        self.register_buffer('batch_mean', torch.ones(1)*(20))
+        self.register_buffer('classwise_mean', torch.ones(classnum)*(20))
+        self.register_buffer('batch_std', torch.ones(1)*(10))
+        self.soft_max = nn.Softmax(dim=1)        
+
+        ### sampling 
+        self.num_sample = int(self.classnum*0.2)  
+
+
+        print('\n fraFace with the following property')
+        print('self.m', self.m)
+        print('self.h', self.h)
+        print('self.s', self.s)
+        print('self.t_alpha', self.t_alpha)
+
+
+
+    def forward(self, embbedings, norms, label):
+
+
+        kernel_norm = l2_norm(self.kernel,axis=0)
+        cosine = torch.mm(embbedings,kernel_norm)
+        cosine = cosine.clamp(-1+self.eps, 1-self.eps) # for stability
+
+        
+        safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
+        safe_norms = safe_norms.clone().detach()
+        
+
+        # update batchmean batchstd
+        with torch.no_grad():
+
+            random_indices = torch.randperm(self.classnum)[:self.num_sample].cuda()
+            lu = label.unique()
+            freaze_idx = remove_common_elements(random_indices,lu)
+            # for idx in freaze_idx:
+            #     self.kernel[:,idx].requires_grad = False
+            #     print(self.kernel[:,idx].requires_grad)
+
+
+
+
+            # ## group by mean! 
+            M = torch.zeros(self.classnum,label.size()[0]).cuda()
+            M[label.squeeze(),torch.arange(label.size()[0])] = 1
+            M = torch.nn.functional.normalize(M, p=1, dim=1)
+            
+            batch_group_mean = torch.mm(M,safe_norms).squeeze().detach()
+            mean = safe_norms.mean().detach()
+            std = safe_norms.std().detach()
+                        
+            self.classwise_mean[lu] = batch_group_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.classwise_mean[lu]
+            self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
+            self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
+        
+        
+      
+        #TODO consider batch 
+        mask = torch.ones_like(self.kernel, dtype=torch.bool,device=self.kernel.device)
+        mask[:,freaze_idx] = False
+        hook_ = self.kernel.register_hook(lambda grad: grad * mask.float())
+        # print(self.kernel.grad)
+
+        margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
+        # norm_weight = (safe_norms - self.batch_mean) / (self.batch_std+self.eps)
+        # norm_weight = torch.clip(norm_weight * self.h , -1, 1)
+        margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333 not for classwize 
+        margin_scaler = torch.clip(margin_scaler, -1, 1)
+
+        ##class-wize static 
+        cw_margin_scaler = (safe_norms - self.classwise_mean[label].unsqueeze(1)) / (self.batch_std+self.eps) # 66% between -1, 1
+        cw_margin_scaler = torch.clip(cw_margin_scaler, -1, 1) * self.h
+
+        cw_cosine = cosine.clone()
+        
+        m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
+        g_angular = self.m * margin_scaler * -1
+
+        # import pdb ; pdb.set_trace()
+        origin_m_arc = m_arc * g_angular
+        theta = cosine.acos()
+
+        theta_m = torch.clip(theta + origin_m_arc, min=self.eps, max=math.pi-self.eps)
+        cosine = theta_m.cos()
+
+
+        m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
+        m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
+
+        g_add = self.m + (self.m * margin_scaler)
+        origin_m_cos = m_cos * g_add
+        cosine = cosine - origin_m_cos
+
+
+        # scale
+        scaled_cosine_m = cosine * self.s
+
+        return scaled_cosine_m,hook_
+
+
 
 ####TODO 
 
@@ -174,8 +793,7 @@ class utilFace(Module):
         safe_norms = torch.clip(norms, min=0.001, max=100) # for stability
         safe_norms = safe_norms.clone().detach()
         
-
-        distill_cos = (cosine.detach() + 1 )/2 
+        distill_cos = cosine.clone()
         distill_cos = self.soft_max(distill_cos)
 
         # update batchmean batchstd
@@ -194,59 +812,33 @@ class utilFace(Module):
             self.classwise_mean[lu] = batch_group_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.classwise_mean[lu]
             self.batch_mean = mean * self.t_alpha + (1 - self.t_alpha) * self.batch_mean
             self.batch_std =  std * self.t_alpha + (1 - self.t_alpha) * self.batch_std
-        
-            ## group logit? TODO add weight? 
-            batch_logit_mean = torch.mm(M,distill_cos).squeeze()
-            
-            # self.distill_buffer[lu] = batch_logit_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.distill_buffer[lu]
-            
-            ## topk with cosine value
-            ## TODO is random value with origin label
-
-            # cos = distill_cos.clone().detach()
-            # cos[torch.arange(label.size()[0]), label.squeeze()] = 2.0
-            # distill_idx = torch.topk(cos, k=int(self.num_sample))[1]
-            uniform = torch.ones((label.size()[0])).cuda()
-            uniform = uniform/uniform.sum()
-            
-            
 
         
         margin_scaler = (safe_norms - self.batch_mean) / (self.batch_std+self.eps) # 66% between -1, 1
-        # norm_weight = (safe_norms - self.batch_mean) / (self.batch_std+self.eps)
-        # norm_weight = torch.clip(norm_weight * self.h , -1, 1)
+        cw_margin_scaler = (safe_norms - self.classwise_mean[label].unsqueeze(1)) / (self.batch_std+self.eps) # 66% between -1, 1
+        ### weight for distill buffer 
+        with torch.no_grad():
+            # import pdb ; pdb.set_trace()
+            cos_cond = (cosine[torch.arange(label.size()[0]),label]>0.8).unsqueeze(1).expand_as(distill_cos)
+            cond = torch.where(cos_cond,distill_cos.detach(),torch.tensor(0, dtype=distill_cos.dtype).to(distill_cos.device))
+            batch_logit_mean = torch.mm(M,cond).squeeze()
+            self.distill_buffer[lu] = batch_logit_mean[lu] * self.t_alpha + (1 - self.t_alpha) * self.distill_buffer[lu]
+
+
         margin_scaler = margin_scaler * self.h # 68% between -0.333 ,0.333 when h:0.333 not for classwize 
         margin_scaler = torch.clip(margin_scaler, -1, 1)
 
         ##class-wize static 
-        cw_margin_scaler = (safe_norms - self.classwise_mean[label].unsqueeze(1)) / (self.batch_std+self.eps) # 66% between -1, 1
         cw_margin_scaler = torch.clip(cw_margin_scaler, -1, 1) * self.h
 
-        cw_cosine = cosine.clone()
-        
         m_arc = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
         m_arc.scatter_(1, label.reshape(-1, 1), 1.0)
         g_angular = self.m * margin_scaler * -1
-        # g_angular = self.m * 1
-        # import pdb ; pdb.set_trace()
         origin_m_arc = m_arc * g_angular
         theta = cosine.acos()
 
         theta_m = torch.clip(theta + origin_m_arc, min=self.eps, max=math.pi-self.eps)
         cosine = theta_m.cos()
-
-        ## CW
-        g_angular_cw = self.m * cw_margin_scaler * -1
-        cw_m_arc = m_arc * g_angular_cw
-        cw_theta = cw_cosine.acos()
-
-        cw_theta_m = torch.clip(cw_theta + cw_m_arc, min=self.eps, max=math.pi-self.eps)
-        cw_cosine = cw_theta_m.cos()
-        
-        # print("first",(cosine == cw_cosine).sum()/cw_cosine.reshape(-1).shape[0])
-
-        ######
-
 
         m_cos = torch.zeros(label.size()[0], cosine.size()[1], device=cosine.device)
         m_cos.scatter_(1, label.reshape(-1, 1), 1.0)
@@ -255,37 +847,18 @@ class utilFace(Module):
         origin_m_cos = m_cos * g_add
         cosine = cosine - origin_m_cos
 
-        # ## CW 
-        cw_g_add = self.m + (self.m * cw_margin_scaler)
-        cw_m_cos = m_cos * cw_g_add
-        cw_cosine = cw_cosine - cw_m_cos
-
-
 
 
         # scale
         scaled_cosine_m = cosine * self.s
-        scaled_cw_cosine_m = cw_cosine * self.s
-
-        # print("last",(scaled_cosine_m == scaled_cw_cosine_m).sum()/scaled_cosine_m.reshape(-1).shape[0])
-
-        ## distilation  
-        # import pdb ; pdb.set_trace()
 
         # origin 
-        # mean_kl_loss = (((1-margin_scaler)/2)*self.kl_loss(distill_cos,self.distill_buffer[label.squeeze()])).mean()
+        # mean_kl_loss = (((1-margin_scaler)/2)*self.kl_loss(distill_cos,self.distill_buffer[label.squeeze()]/cw_margin_scaler)).mean()
+        mean_kl_loss = self.kl_loss(distill_cos,self.distill_buffer[label.squeeze()]/(2-margin_scaler)).mean()
+
         ## select random idx
-         
-        # mean_kl_loss = self.kl_loss(self.soft_max(torch.gather(distill_cos, 1, distill_idx)),self.soft_max(torch.gather(self.distill_buffer[label.squeeze()], 1, distill_idx)))
-        
 
-        mean_kl_loss = torch.where(safe_norms<=self.batch_mean,self.kl_loss(safe_norms.squeeze()/safe_norms.sum(),uniform),torch.tensor(0, dtype=safe_norms.dtype).to(safe_norms.device)).mean()
-        # print(mean_kl_loss.shape)
-        # mean_kl_loss = self.kl_loss(self.soft_max(safe_norms.squeeze()),uniform).mean()
-
-        # return scaled_cosine_m, norm_weight, mean_kl_loss
-        return scaled_cosine_m, cw_margin_scaler, mean_kl_loss, scaled_cw_cosine_m
-        # return scaled_cosine_m, cw_margin_scaler, None, None
+        return scaled_cosine_m, cw_margin_scaler, mean_kl_loss, None
 
 
 

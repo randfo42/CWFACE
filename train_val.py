@@ -35,7 +35,7 @@ class Trainer(LightningModule):
 
         
         self.cross_entropy_loss = CrossEntropyLoss()
-        self.cross_entropy_loss_non_redu = CrossEntropyLoss(reduction='none')
+        self.cross_entropy_loss_wo_reduction = CrossEntropyLoss(reduction='none')
         self.class_sample_num = self.hparams.head=='cwlnface'
         # self.class_sample_index = self.hparams.head=='adaface'
  
@@ -60,6 +60,16 @@ class Trainer(LightningModule):
                 cos_thetas, cos_thetas2,norm_norms =self.head(embeddings, norms, labels)
             elif self.hparams.head == 'utilface':
                 cos_thetas, norm_weight, mean_kl_loss,scaled_cw_cosine_m =self.head(embeddings, norms, labels)
+            elif self.hparams.head == 'fraface':
+                cos_thetas,hook_ = self.head(embeddings, norms, labels)
+                self.hook_handle = hook_
+            elif self.hparams.head == 'fratface':
+                cos_thetas,cos_thetas_w2,margin_scaler,hook_ = self.head(embeddings, norms, labels)
+                self.hook_handle = hook_
+            elif self.hparams.head == 'qualface':
+                cos_thetas,q_est_loss,dist_est_loss = self.head(embeddings, norms, labels)
+            elif self.hparams.head == 'ufoface':
+                cos_thetas,ood_cond,ood_sep = self.head(embeddings, norms, labels)
             else:
                 cos_thetas = self.head(embeddings, norms, labels)
         
@@ -77,6 +87,12 @@ class Trainer(LightningModule):
             return cos_thetas, cos_thetas2, norms, embeddings, labels, norm_norms
         elif self.hparams.head == 'utilface':
             return cos_thetas, norms, embeddings, labels, norm_weight, mean_kl_loss,scaled_cw_cosine_m
+        elif self.hparams.head == 'fratface':
+            return cos_thetas, cos_thetas_w2,margin_scaler, norms, embeddings, labels
+        elif self.hparams.head == 'qualface':
+            return cos_thetas,q_est_loss,dist_est_loss , norms, embeddings, labels
+        elif self.hparams.head == 'ufoface':
+            return cos_thetas, ood_cond,ood_sep , norms, embeddings, labels
         else:
             return cos_thetas, norms, embeddings, labels
 
@@ -98,6 +114,16 @@ class Trainer(LightningModule):
         # elif self.class_sample_index:
         #     images, (labels,index) = batch
         #     cos_thetas, norms, embeddings, labels = self.forward(images, labels,index)
+        elif self.hparams.head == 'fratface':
+            images, labels = batch
+            cos_thetas, cos_thetas_w2,margin_scaler, norms, embeddings, labels = self.forward(images, labels)
+        
+        elif self.hparams.head == 'qualface':
+            images, labels = batch
+            cos_thetas,q_est_loss,dist_est_loss , norms, embeddings, labels = self.forward(images, labels)
+        elif self.hparams.head == 'ufoface':
+            images, labels = batch
+            cos_thetas,ood_cond,ood_sep, norms, embeddings, labels = self.forward(images, labels)
         else:
             images, labels = batch
             cos_thetas, norms, embeddings, labels = self.forward(images, labels)
@@ -105,12 +131,10 @@ class Trainer(LightningModule):
         max_norm = 22 
         
         if self.hparams.head == 'adawindexface':
-            
-            
 
             if False:
                 norms = torch.clip(norms,max=max_norm)
-                loss_train = torch.where(norms<max_norm,self.cross_entropy_loss_non_redu(cos_thetas,labels).mean(),0)
+                loss_train = torch.where(norms<max_norm,self.cross_entropy_loss_wo_reduction(cos_thetas,labels).mean(),0)
 
             elif False:
                 ## remove half or std1 
@@ -121,7 +145,7 @@ class Trainer(LightningModule):
                 # self.hparams.h std1 
                 # 0 half 
                 loss_train = torch.where(norm_norms.squeeze() < 0.,
-                self.cross_entropy_loss_non_redu(cos_thetas,labels).mean(), torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean()
+                self.cross_entropy_loss_wo_reduction(cos_thetas,labels).mean(), torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean()
 
                 # print(loss_train)
             elif False:
@@ -129,7 +153,7 @@ class Trainer(LightningModule):
                 loss_train = self.cross_entropy_loss(cos_thetas, labels) + ((norms-20)**2).mean()
             elif True:
                 loss_train = torch.where(norm_norms.squeeze() < 0.,
-                self.cross_entropy_loss_non_redu(cos_thetas,labels).mean()  + 0.5*((norms-20)**2).mean() , torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean() 
+                self.cross_entropy_loss_wo_reduction(cos_thetas,labels).mean()  + 0.5*((norms-20)**2).mean() , torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean() 
 
             else:
                 norms = torch.clip(norms,max=max_norm)
@@ -139,13 +163,13 @@ class Trainer(LightningModule):
                 # loss_train = (0.5*self.relu(-(norms-max_norm))* ((torch.pow(0.9,norms))*self.cross_entropy_loss_non_redu(cos_thetas,labels)+
                 #             (0.1*torch.pow(0.9,max_norm-norms))*self.cross_entropy_loss_non_redu(mWax_cos_thetas,argmax_idx))).mean()  ## ori 
         
-                loss_train = (self.relu(-(norms-max_norm))* ((torch.pow(0.9,norms))*self.cross_entropy_loss_non_redu(cos_thetas,labels)+
-                            (0.1*torch.pow(0.9,max_norm-norms))*self.cross_entropy_loss_non_redu(max_cos_thetas,argmax_idx))).mean()
+                loss_train = (self.relu(-(norms-max_norm))* ((torch.pow(0.9,norms))*self.cross_entropy_loss_wo_reduction(cos_thetas,labels)+
+                            (0.1*torch.pow(0.9,max_norm-norms))*self.cross_entropy_loss_wo_reduction(max_cos_thetas,argmax_idx))).mean()
 
         elif self.hparams.head == 'adasface':
                 
             loss_train = self.cross_entropy_loss(cos_thetas, labels) + 0.5*torch.where(norm_norms.squeeze() < 0.,
-                self.cross_entropy_loss_non_redu(cos_thetas2,labels).mean(), torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean()
+                self.cross_entropy_loss_wo_reduction(cos_thetas2,labels).mean(), torch.tensor(0, dtype=norm_norms.dtype).to(norm_norms.device)).mean()
 
             # print(cos_thetas2)
         elif self.hparams.head == 'utilface':
@@ -154,7 +178,7 @@ class Trainer(LightningModule):
             weight_by_epoch = 1 if self.current_epoch > 12 else 0
             # loss_train = (-(norm_weight-1)*self.cross_entropy_loss_non_redu(cos_thetas, labels)).mean()
             # print(mean_kl_loss)
-            loss_train = self.cross_entropy_loss_non_redu(cos_thetas, labels).mean() + weight_by_epoch * 1* mean_kl_loss
+            loss_train = self.cross_entropy_loss_wo_reduction(cos_thetas, labels).mean() + weight_by_epoch * 1* mean_kl_loss  #+ 0.5*((norms-20)**2).mean()
             # loss_train = (1-weight_by_epoch)*self.cross_entropy_loss_non_redu(cos_thetas, labels).mean() + 
             # weight_by_epoch * (self.relu(-norm_weight) *self.cross_entropy_loss_non_redu(scaled_cw_cosine_m, labels)).mean()
             
@@ -165,12 +189,30 @@ class Trainer(LightningModule):
             # import pdb ; pdb.set_trace()
 
             # loss_train = self.cross_entropy_loss_non_redu(cos_thetas, labels).mean()
+        elif self.hparams.head == 'fratface':
+            weight_by_epoch = self.current_epoch/self.hparams.epochs
+            # margin_scaler_ori = torch.clip(margin_scaler*3,-1, 1)
+            # weight_by_epoch = 1 if self.current_epoch > 12 else 0
+            # loss_train = (1-weight_by_epoch) * self.cross_entropy_loss(cos_thetas, labels) + weight_by_epoch*(((1 - margin_scaler)/2) * self.cross_entropy_loss_non_redu(cos_thetas_w2, labels)).mean()
+            # loss_train = self.cross_entropy_loss(cos_thetas, labels) + weight_by_epoch*(((1 - margin_scaler)/2) * self.cross_entropy_loss_non_redu(cos_thetas_w2, labels)).mean() # + ((margin_scaler)**2).mean()
+            loss_train = self.cross_entropy_loss(cos_thetas, labels) + weight_by_epoch * self.cross_entropy_loss_non_redu(cos_thetas_w2, labels).mean() # + ((margin_scaler)**2).mean()
 
+        elif self.hparams.head == 'qualface':
+            # weight_by_epoch = self.current_epoch/self.hparams.epochs
+            loss_train = self.cross_entropy_loss(cos_thetas, labels) + 0.5 * q_est_loss.mean() + 0.5*dist_est_loss.mean()
+        elif self.hparams.head == 'ufoface':
+            
+            # weight_by_epoch = 1 if self.current_epoch > 12 else 0
+            weight_by_epoch = self.current_epoch/self.hparams.epochs
+            # import pdb ; pdb.set_trace()
+            ## 1 incude OOD at origin loss 
+            loss_train = self.cross_entropy_loss_wo_reduction(cos_thetas, labels).mean() + weight_by_epoch *7* ood_sep
+            
 
         elif False:
             ## for casia 0.1 
             # import pdb ; pdb.set_trace()
-            loss_train = (0.5*self.relu(-(norms-25)) * self.cross_entropy_loss_non_redu(cos_thetas,labels)).mean()
+            loss_train = (0.5*self.relu(-(norms-25)) * self.cross_entropy_loss_wo_reduction(cos_thetas,labels)).mean()
         else:
             loss_train = self.cross_entropy_loss(cos_thetas, labels)
         
@@ -214,12 +256,17 @@ class Trainer(LightningModule):
 
         return loss_train
 
+    def on_train_batch_end(self, *outputs):
+        if self.hparams.head == 'fraface' or self.hparams.head == 'fratface':
+            self.hook_handle.remove()
+        return None
+
     def training_epoch_end(self, outputs):
         #if self.hparams.head == 'cwcface':
         #    data = {'feature_mb':self.head.feature_mb, 'proxy_mb':self.head.proxy_mb}
         #    with open(f'regist50nms_{self.current_epoch}.pickle','wb') as f:
         #        pickle.dump(data,f)
-            
+        
 
         return None
 
