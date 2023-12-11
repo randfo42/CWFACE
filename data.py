@@ -2,13 +2,13 @@ import os
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from torchvision.datasets import ImageFolder
 import numpy as np
 import pandas as pd
 import evaluate_utils
 from dataset.image_folder_dataset import CustomImageFolderDataset
 from dataset.five_validation_dataset import FiveValidationDataset
 from dataset.record_dataset import AugmentRecordDataset,AugmentRecordDatasetWithLabelNum,AugmentRecordDatasetWithIdx,AugmentRecordDatasetWithPickle
-
 
 class DataModule(pl.LightningDataModule):
 
@@ -139,6 +139,8 @@ def train_dataset(data_root, train_data_path,
     train_transform = transforms.Compose([
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
+        # transforms.GaussianBlur((7,7),sigma=(10.)),
+        # transforms.RandomVerticalFlip(p=1),
         transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])
     ])
 
@@ -178,7 +180,9 @@ def train_dataset(data_root, train_data_path,
                                                 swap_color_channel=swap_color_channel,
                                                 output_dir=output_dir)
     else:
+        
         train_dir = os.path.join(data_root, train_data_path, 'imgs')
+        # train_dir = os.path.join(data_root, train_data_path)
         train_dataset = CustomImageFolderDataset(root=train_dir,
                                                  transform=train_transform,
                                                  low_res_augmentation_prob=low_res_augmentation_prob,

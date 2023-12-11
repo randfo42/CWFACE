@@ -68,8 +68,10 @@ class Trainer(LightningModule):
                 self.hook_handle = hook_
             elif self.hparams.head == 'qualface':
                 cos_thetas,q_est_loss,dist_est_loss = self.head(embeddings, norms, labels)
-            elif self.hparams.head == 'ufoface':
-                cos_thetas,ood_cond,ood_sep = self.head(embeddings, norms, labels)
+            elif self.hparams.head in ['ufoface', 'arcwface','coswface']:
+                cos_thetas,ood_cond,ood_sep,margin_scaler = self.head(embeddings, norms, labels)
+            # elif self.hparams.head == 'arcwface':
+            #     cos_thetas,ood_cond,ood_sep,margin_scaler = self.head(embeddings, norms, labels)
             else:
                 cos_thetas = self.head(embeddings, norms, labels)
         
@@ -91,8 +93,8 @@ class Trainer(LightningModule):
             return cos_thetas, cos_thetas_w2,margin_scaler, norms, embeddings, labels
         elif self.hparams.head == 'qualface':
             return cos_thetas,q_est_loss,dist_est_loss , norms, embeddings, labels
-        elif self.hparams.head == 'ufoface':
-            return cos_thetas, ood_cond,ood_sep , norms, embeddings, labels
+        elif self.hparams.head in ['ufoface', 'arcwface','coswface']:
+            return cos_thetas, ood_cond,ood_sep,margin_scaler , norms, embeddings, labels
         else:
             return cos_thetas, norms, embeddings, labels
 
@@ -121,9 +123,9 @@ class Trainer(LightningModule):
         elif self.hparams.head == 'qualface':
             images, labels = batch
             cos_thetas,q_est_loss,dist_est_loss , norms, embeddings, labels = self.forward(images, labels)
-        elif self.hparams.head == 'ufoface':
+        elif self.hparams.head in ['ufoface', 'arcwface','coswface']:
             images, labels = batch
-            cos_thetas,ood_cond,ood_sep, norms, embeddings, labels = self.forward(images, labels)
+            cos_thetas,ood_cond,ood_sep,margin_scaler, norms, embeddings, labels = self.forward(images, labels)
         else:
             images, labels = batch
             cos_thetas, norms, embeddings, labels = self.forward(images, labels)
@@ -178,7 +180,7 @@ class Trainer(LightningModule):
             weight_by_epoch = 1 if self.current_epoch > 12 else 0
             # loss_train = (-(norm_weight-1)*self.cross_entropy_loss_non_redu(cos_thetas, labels)).mean()
             # print(mean_kl_loss)
-            loss_train = self.cross_entropy_loss_wo_reduction(cos_thetas, labels).mean() + weight_by_epoch * 1* mean_kl_loss  #+ 0.5*((norms-20)**2).mean()
+            loss_train = self.cross_entropy_loss_wo_reduction(cos_thetas, labels).mean() + weight_by_epoch * 10* mean_kl_loss  #+ 0.5*((norms-20)**2).mean()
             # loss_train = (1-weight_by_epoch)*self.cross_entropy_loss_non_redu(cos_thetas, labels).mean() + 
             # weight_by_epoch * (self.relu(-norm_weight) *self.cross_entropy_loss_non_redu(scaled_cw_cosine_m, labels)).mean()
             
@@ -200,13 +202,16 @@ class Trainer(LightningModule):
         elif self.hparams.head == 'qualface':
             # weight_by_epoch = self.current_epoch/self.hparams.epochs
             loss_train = self.cross_entropy_loss(cos_thetas, labels) + 0.5 * q_est_loss.mean() + 0.5*dist_est_loss.mean()
-        elif self.hparams.head == 'ufoface':
-            
+        elif self.hparams.head in ['ufoface', 'arcwface','coswface']:
+            # print('??')
             # weight_by_epoch = 1 if self.current_epoch > 12 else 0
             weight_by_epoch = self.current_epoch/self.hparams.epochs
             # import pdb ; pdb.set_trace()
-            ## 1 incude OOD at origin loss 
-            loss_train = self.cross_entropy_loss_wo_reduction(cos_thetas, labels).mean() + weight_by_epoch *7* ood_sep
+            ## 1 incude OOD at origin loss 2149
+
+            
+            # loss_train = self.cross_entropy_loss_wo_reduction(cos_thetas, labels).mean() + weight_by_epoch*(15* ood_sep + ((1-margin_scaler)**2).mean())
+            loss_train = self.cross_entropy_loss_wo_reduction(cos_thetas, labels).mean() + weight_by_epoch* 10* ood_sep
             
 
         elif False:
@@ -252,7 +257,7 @@ class Trainer(LightningModule):
         # log
         self.log('lr', lr, on_step=True, on_epoch=True, logger=True)
         self.log('train_loss', loss_train, on_step=True, on_epoch=True, logger=True)
-        self.log('batch_norm_mean', self.head.batch_mean.mean(), on_step=True, on_epoch=True, logger=True)
+        # self.log('batch_norm_mean', self.head.batch_mean.mean(), on_step=True, on_epoch=True, logger=True)
 
         return loss_train
 

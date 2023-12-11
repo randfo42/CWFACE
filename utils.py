@@ -113,6 +113,10 @@ def get_num_class(hparams):
         # CASIA-WebFace
         assert not hparams.train_data_subset
         class_num = 10572
+    elif 'casia_clean_align' in hparams.train_data_path.lower():
+        # CASIA-WebFace clean
+        assert not hparams.train_data_subset
+        class_num = 10575
     elif 'webface4m' in hparams.train_data_path.lower():
         assert not hparams.train_data_subset
         class_num = 205990
