@@ -2,6 +2,8 @@ import numpy as np
 import scipy.io as sio
 import os
 import scipy
+import math
+from tqdm import tqdm
 
 def get_all_files(root, extension_list=['.jpg', '.png', '.jpeg']):
 
@@ -15,26 +17,26 @@ def get_all_files(root, extension_list=['.jpg', '.png', '.jpeg']):
 
 
 class TinyFaceTest:
-    def __init__(self, tinyface_root='/data/data/faces/tinyface', alignment_dir_name='aligned_pad_0.1_pad_high'):
+    def __init__(self, tinyface_root='/data/data/faces/tinyface', alignment_dir_name='surv_align'):
 
         self.tinyface_root = tinyface_root
         # as defined by tinyface protocol
-        self.gallery_dict = scipy.io.loadmat(os.path.join(tinyface_root, 'tinyface/Testing_Set/gallery_match_img_ID_pairs.mat'))
-        self.probe_dict = scipy.io.loadmat(os.path.join(tinyface_root, 'tinyface/Testing_Set/probe_img_ID_pairs.mat'))
-        self.proto_gal_paths = [os.path.join(tinyface_root, alignment_dir_name, 'Gallery_Match', p[0].item()) for p in self.gallery_dict['gallery_set']]
-        self.proto_prob_paths = [os.path.join(tinyface_root, alignment_dir_name, 'Probe', p[0].item()) for p in self.probe_dict['probe_set']]
-        self.proto_distractor_paths = get_all_files(os.path.join(tinyface_root, alignment_dir_name, 'Gallery_Distractor'))
+        self.gallery_dict = scipy.io.loadmat(os.path.join(tinyface_root, 'QMUL-SurvFace/Face_Identification_Test_Set/gallery_img_ID_pairs.mat'))
+        self.probe_dict = scipy.io.loadmat(os.path.join(tinyface_root, 'QMUL-SurvFace/Face_Identification_Test_Set/mated_probe_img_ID_pairs.mat'))
+        self.proto_gal_paths = [os.path.join(tinyface_root, alignment_dir_name, 'gallery', p[0].item()) for p in self.gallery_dict['gallery_set']]
+        self.proto_prob_paths = [os.path.join(tinyface_root, alignment_dir_name, 'mated_probe', p[0].item()) for p in self.probe_dict['mated_probe_set']]
+        self.proto_distractor_paths = get_all_files(os.path.join(tinyface_root, alignment_dir_name, 'unmated_probe'))
 
         self.image_paths = get_all_files(os.path.join(tinyface_root, alignment_dir_name))
         self.image_paths = np.array(self.image_paths).astype(np.object).flatten()
 
-        self.probe_paths = get_all_files(os.path.join(tinyface_root, 'tinyface/Testing_Set/Probe'))
+        self.probe_paths = get_all_files(os.path.join(tinyface_root, 'QMUL-SurvFace/Face_Identification_Test_Set/gallery'))
         self.probe_paths = np.array(self.probe_paths).astype(np.object).flatten()
 
-        self.gallery_paths = get_all_files(os.path.join(tinyface_root, 'tinyface/Testing_Set/Gallery_Match'))
+        self.gallery_paths = get_all_files(os.path.join(tinyface_root, 'QMUL-SurvFace/Face_Identification_Test_Set/mated_probe'))
         self.gallery_paths = np.array(self.gallery_paths).astype(np.object).flatten()
 
-        self.distractor_paths = get_all_files(os.path.join(tinyface_root, 'tinyface/Testing_Set/Gallery_Distractor'))
+        self.distractor_paths = get_all_files(os.path.join(tinyface_root, 'QMUL-SurvFace/Face_Identification_Test_Set/unmated_probe'))
         self.distractor_paths = np.array(self.distractor_paths).astype(np.object).flatten()
 
         self.init_proto(self.probe_paths, self.gallery_paths, self.distractor_paths)
@@ -61,8 +63,62 @@ class TinyFaceTest:
         self.indices_gallery = np.concatenate([self.indices_match, self.indices_distractor])
         self.labels_gallery = np.concatenate([self.labels_match, self.labels_distractor])
 
+    def chunked_inner_product(self, A, B, chunk_size=5000):
+        """
+        Compute the inner product between two matrices A and B in chunks to save memory.
+        A: [m, d]
+        B: [n, d]
+        Returns a matrix [m, n] where each entry i,j is the inner product between A[i] and B[j].
+        """
+        A, B = np.array(A), np.array(B)
+        m, d = A.shape
+        n, _ = B.shape
+        result = np.zeros((m, n))
+        for i in range(0, m, chunk_size):
+            for j in range(0, n, chunk_size):
+                end_i = min(i + chunk_size, m)
+                end_j = min(j + chunk_size, n)
+                result[i:end_i, j:end_j] = np.dot(A[i:end_i], B[j:end_j].T)
+        return result
 
-    def test_identification(self, features, ranks=[1,5,20]):
+    # def test_identification(self, features, ranks=[1,5,20]):
+    #     ## edit for large size metrics
+    #     feat_probe = features[self.indices_probe]
+    #     feat_gallery = features[self.indices_gallery]
+        
+    #     # Use chunked inner product instead of direct matrix multiplication
+        
+    #     chunck = 10000
+    #     FARs=[1.0]
+    #     DIRs = np.zeros([len(FARs), len(ranks)], dtype=np.float32).flatten()
+
+    #     for i in tqdm(range(math.ceil(feat_probe.shape[0]/chunck))): 
+    #         feat_temp = feat_probe[i*chunck:(i+1)*chunck]
+    #         score_mat = inner_product(feat_temp, feat_gallery)
+    #         label_mat = self.labels_probe[i*chunck:(i+1)*chunck,None] == self.labels_gallery[None,:]
+
+    #         results, _, __ = DIR_FAR(score_mat, label_mat, ranks, FARs)
+    #         DIRs += results
+
+    #     DIRs/=feat_probe.shape[0]
+
+    #     return DIRs
+
+    # def test_identification(self, features, ranks=[1,5,20]):
+    #     feat_probe = features[self.indices_probe]
+    #     feat_gallery = features[self.indices_gallery]
+    #     compare_func = inner_product
+    #     score_mat = compare_func(feat_probe, feat_gallery)
+
+    #     label_mat = self.labels_probe[:,None] == self.labels_gallery[None,:]
+
+    #     results, _, __ = DIR_FAR(score_mat, label_mat, ranks)
+
+    #     return results
+
+    def test_identification(self, features):
+
+        FARs = [1e-3, 1e-2, 1e-1, 3e-1] if FARs is None else FARs
         feat_probe = features[self.indices_probe]
         feat_gallery = features[self.indices_gallery]
         compare_func = inner_product
@@ -73,17 +129,17 @@ class TinyFaceTest:
         results, _, __ = DIR_FAR(score_mat, label_mat, ranks)
 
         return results
-    
+
     ### added
-    def get_test_feature(self,features):
+    # def get_test_feature(self,features):
         
-        feat_probe = features[self.indices_probe]
-        feat_gallery = features[self.indices_gallery]
-        compare_func = inner_product
+    #     feat_probe = features[self.indices_probe]
+    #     feat_gallery = features[self.indices_gallery]
+    #     compare_func = inner_product
         
-        label_mat = self.labels_probe[:,None] == self.labels_gallery[None,:]
+    #     label_mat = self.labels_probe[:,None] == self.labels_gallery[None,:]
         
-        return feat_probe, feat_gallery, compare_func, label_mat,  self.labels_probe, self.labels_gallery
+    #     return feat_probe, feat_gallery, compare_func, label_mat,  self.labels_probe, self.labels_gallery
         
         
 def inner_product(x1, x2):
@@ -99,20 +155,8 @@ def DIR_FAR(score_mat, label_mat, ranks=[1], FARs=[1.0], get_false_indices=False
     '''
     Code borrowed from https://github.com/seasonSH/Probabilistic-Face-Embeddings
 
-    Closed/Open-set Identification.
-        A general case of Cummulative Match Characteristic (CMC)
-        where thresholding is allowed for open-set identification.
-    args:
-        score_mat:            a P x G matrix, P is number of probes, G is size of gallery
-        label_mat:            a P x G matrix, bool
-        ranks:                a list of integers
-        FARs:                 false alarm rates, if 1.0, closed-set identification (CMC)
-        get_false_indices:    not implemented yet
-    return:
-        DIRs:                 an F x R matrix, F is the number of FARs, R is the number of ranks,
-                              flatten into a vector if F=1 or R=1.
-        FARs:                 an vector of length = F.
-        thredholds:           an vector of length = F.
+    edit for large size metrics
+
     '''
     assert score_mat.shape==label_mat.shape
     # assert np.all(label_mat.astype(np.float32).sum(axis=1) <=1 )
@@ -164,9 +208,9 @@ def DIR_FAR(score_mat, label_mat, ranks=[1], FARs=[1.0], get_false_indices=False
             success_retrieval = sorted_label_mat_m[:,0:rank].any(axis=1)
             if openset:
                 success_threshold = gt_score_m >= threshold
-                DIRs[i,j] = (success_threshold & success_retrieval).astype(np.float32).mean()
+                DIRs[i,j] = (success_threshold & success_retrieval).astype(np.float32).sum()
             else:
-                DIRs[i,j] = success_retrieval.astype(np.float32).mean()
+                DIRs[i,j] = success_retrieval.astype(np.float32).sum()
             if get_false_indices:
                 false_retrieval[i,j] = ~success_retrieval
                 false_accept[i,j] = score_mat_nm.max(1) >= threshold
@@ -218,3 +262,35 @@ def find_thresholds_by_FAR(score_vec, label_vec, FARs=None, epsilon=1e-5):
         thresholds = np.array(thresholds)
 
     return thresholds
+
+def ROC(score_vec, label_vec, thresholds=None, FARs=None, get_false_indices=False):
+    ''' Compute Receiver operating characteristic (ROC) with a score and label vector.
+    '''
+    assert score_vec.ndim == 1
+    assert score_vec.shape == label_vec.shape
+    assert label_vec.dtype == np.bool
+    
+    if thresholds is None:
+        thresholds = find_thresholds_by_FAR(score_vec, label_vec, FARs=FARs)
+
+    assert len(thresholds.shape)==1 
+    if np.size(thresholds) > 10000:
+        warn('number of thresholds (%d) very large, computation may take a long time!' % np.size(thresholds))
+
+    # FARs would be check again
+    TARs = np.zeros(thresholds.shape[0])
+    FARs = np.zeros(thresholds.shape[0])
+    false_accept_indices = []
+    false_reject_indices = []
+    for i,threshold in enumerate(thresholds):
+        accept = score_vec >= threshold
+        TARs[i] = np.mean(accept[label_vec])
+        FARs[i] = np.mean(accept[~label_vec])
+        if get_false_indices:
+            false_accept_indices.append(np.argwhere(accept & (~label_vec)).flatten())
+            false_reject_indices.append(np.argwhere((~accept) & label_vec).flatten())
+
+    if get_false_indices:
+        return TARs, FARs, thresholds, false_accept_indices, false_reject_indices
+    else:
+        return TARs, FARs, thresholds

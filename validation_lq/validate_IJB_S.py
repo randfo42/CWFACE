@@ -38,7 +38,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     adaface_models = {
-        'ir50': ["../pretrained/adaface_ir50_ms1mv2.ckpt", 'ir_50'],
+        #'ir50': ["../pretrained/adaface_ir50_ms1mv2.ckpt", 'ir_50'],
+        'ir50': ["../pretrained/cwface_ir50_ms1mv2.ckpt", 'ir_50'],
         'ir101_ms1mv2': ["../pretrained/adaface_ir101_ms1mv2.ckpt", 'ir_101'],
         'ir101_ms1mv3': ["../pretrained/adaface_ir101_ms1mv3.ckpt", 'ir_101'],
         'ir101_webface4m': ["../pretrained/adaface_ir101_webface4m.ckpt", 'ir_101'],

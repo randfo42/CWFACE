@@ -4,7 +4,7 @@ from tqdm import tqdm
 import data_utils
 import argparse
 import pandas as pd
-import tinyface_helper
+import survface_helper
 import sys, os
 sys.path.insert(0, os.path.dirname(os.getcwd()))
 import net
@@ -135,7 +135,7 @@ if __name__ == '__main__':
         #'ir50': ["../pretrained/ir50_casia_ada_20_01023.ckpt", 'ir_50'],
         #'ir50': ["../pretrained/ir50_casia_adalimit25_0602_ep32.ckpt", 'ir_50'],
         #'ir50': ["../pretrained/ir50_casia_adaindex_0605_ep37.ckpt", 'ir_50'],
-        #'ir50': ["../pretrained/ir50_casia_adaface_07131_38ep.ckpt", 'ir_50'],
+        'ir50': ["../pretrained/ir50_casia_adaface_07131_38ep.ckpt", 'ir_50'],
         #'ir50': ["../pretrained/ir50_casia_adalimit_07132_34ep.ckpt", 'ir_50'],
         #'ir50': ["../pretrained/ir50_casia_adalimitstd0_07150_39ep.ckpt", 'ir_50'],
         #'ir50': ["../pretrained/ir50_casia_adawindex_07171_ep34.ckpt", 'ir_50'],
@@ -164,32 +164,10 @@ if __name__ == '__main__':
         #'ir50': ["../experiments/ir50_ufo_weight1_proj_layer2_rel_0502_10-21_0/epoch=33-step=32605.ckpt", 'ir_50'],
         #'ir50': ["../experiments/ir50_ufo_weight1_time_proj_layer2_rel_0502_10-22_2/epoch=39-step=38359.ckpt", 'ir_50'],
         #'ir50': ["../experiments/ir50_ufo_weight6_time_cos_0502_10-23_8/epoch=32-step=31646.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight7_time_cos_0502_10-24_0/epoch=38-step=37400.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight8_time_cos_0502_10-24_0/epoch=37-step=36441.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight8_time_cos_0502_10-24_0/last.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight9_time_cos_0502_10-25_0/epoch=39-step=38359.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight10_time_cos_0502_10-25_0/epoch=32-step=31646.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight11_time_cos_0502_10-26_0/epoch=39-step=38359.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight12_time_cos_0502_10-27_0/epoch=38-step=37400.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight13_time_cos_0502_10-27_0/epoch=30-step=29728.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight13_time_cos_0502_10-28_0/epoch=34-step=33564.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight15_time_cos_0502_10-28_0/epoch=38-step=37400.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight16_time_cos_0502_10-29_0/last.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight17_time_cos_0502_10-29_0/epoch=33-step=32605.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight15_time_cos_0502_l2_1_20_10-30_2/epoch=29-step=28769.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight15_time_cos_0502_l2_1Mms__10-30_0/epoch=38-step=37400.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight18_time_cos_0502_10-31_0/epoch=36-step=35482.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight19_time_cos_0502_10-31_0/epoch=29-step=28769.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight20_time_cos_0502_11-01_0/epoch=36-step=35482.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_casia_arc_11-15_4/last.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_casia_cosw_11-15_3/last.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_casia_cosw15_11-15_2/last.ckpt", 'ir_50'],
-        'ir50': ["../experiments/ir50_cosw_weight20_time_cos_0502_12-04_0/epoch=36-step=35482.ckpt", 'ir_50'],
-        #'ir50': ["../experiments/ir50_ufo_weight15_time_cos_0502_all_11-16_0/epoch=32-step=31646.ckpt", 'ir_50'],
+        # 'ir50': ["../experiments/ir50_ufo_weight7_time_cos_0502_10-24_0/epoch=38-step=37400.ckpt", 'ir_50'],
         #'ir50': ["../pretrained/ir50_casia_cw_25_012018.ckpt", 'ir_50'],
         #'ir50': ["../pretrained/ir50_casia_cwl_25_01289.ckpt", 'ir_50'],
-        #'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_ada_29_01280.ckpt", 'ir_101'],
-        #'ir101_ms1mv2': ["../experiments/ir101_ms1mv2_adaface_02-08_0/epoch=23-step=272951.ckpt", 'ir_101'],
+        #'ir101_ms1mv2': ["../pretrained/adaface_ir101_ms1mv2.ckpt", 'ir_101'],
         #'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_ada_29_01280.ckpt", 'ir_101'],
         #'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_cwl_23_02080.ckpt", 'ir_101'],
         #'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_cwl_clip_24_02170.ckpt", 'ir_101'],
@@ -198,9 +176,7 @@ if __name__ == '__main__':
         #'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_cwc_ncomp_25_03241.ckpt", 'ir_101'],
         #'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_cwc_ncomp_25_03241.ckpt", 'ir_101'],
         #'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_ada_limit25_34_06122.ckpt", 'ir_101'],
-        #'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_ada_limit22_28_06191.ckpt", 'ir_101'],
-        #'ir101_ms1mv2': ["../experiments/ir101_ufo_weight_15_time_cos_0502_11-01_0/epoch=24-step=284324.ckpt", 'ir_101'],
-        'ir101_ms1mv2': ["../experiments/ir101_ufo_weight_20_time_cos_0502_12-05_0/epoch=24-step=284324.ckpt", 'ir_101'],
+        'ir101_ms1mv2': ["../pretrained/ir101_ms1mv2_ada_limit22_28_06191.ckpt", 'ir_101'],
         #'ir101_ms1mv3': ["../pretrained/adaface_ir101_ms1mv3.ckpt", 'ir_101'],
         'ir101_ms1mv3': ["../pretrained/ir101_ms1mv3_adalimit25_ep29_06271.ckpt", 'ir_101'],
         'ir101_ms1mv3': ["../experiments/ir101_ada_ms1mv3_fratface_10-07_0/epoch=22-step=465358.ckpt", 'ir_101'],
@@ -212,21 +188,21 @@ if __name__ == '__main__':
     model = load_pretrained_model(args.model_name)
     model.to('cuda:{}'.format(args.gpu))
 
-    tinyface_test = tinyface_helper.TinyFaceTest(tinyface_root=args.data_root,
-                                                 alignment_dir_name='aligned_pad_0.1_pad_high')
+    survface_test = survface_helper.TinyFaceTest(tinyface_root=args.data_root,
+                                                 alignment_dir_name='surv_align')
 
     # set save root
     gpu_id = args.gpu
-    save_path = os.path.join('./tinyface_result', args.model_name, "fusion_{}".format(args.fusion_method))
+    save_path = os.path.join('./survface_result', args.model_name, "fusion_{}".format(args.fusion_method))
 
     if not os.path.exists(save_path):
         os.makedirs(save_path)
     print('save_path: {}'.format(save_path))
 
-    img_paths = tinyface_test.image_paths
+    img_paths = survface_test.image_paths
     print('total images : {}'.format(len(img_paths)))
     dataloader = data_utils.prepare_dataloader(img_paths,  args.batch_size, num_workers=0)
     features, norms = infer(model, dataloader, use_flip_test=args.use_flip_test, fusion_method=args.fusion_method)
-    results = tinyface_test.test_identification(features, ranks=[1,5,20])
+    results = survface_test.test_identification(features, ranks=[1,5,20])
     print(results)
     pd.DataFrame({'rank':[1,5,20], 'values':results}).to_csv(os.path.join(save_path, 'result.csv'))
