@@ -9,5 +9,24 @@
 
 
 
+Performance comparison using True Positive Rate (TPR) at specified False Accept Rate (FAR) on the SurvFace dataset, training with CASIA-WebFace dataset.
+| Method |  | TPR(%)@FAR |  |  |
+| :--- | :--- | :--- | :--- | ---- |
+|  | 0.3 | 0.1 | 0.01 | 0.001 |
+| CosFace | 45.2 | 23.0 | 6.1 | 1.2 |
+| CosFace + NDR | **51.8** | **27.1** | **7.5** | **2.3** |
+| Adaface | 46.7 | 24.8 | 6.1 | 2.2 |
+| Adaface + NDR | **59.0** | **34.5** | **9.1** | **3.1** |
+
+TABLE 2.	Comparison of identification rates at Rank 1 and Rank 5 on the TinyFace dataset, training with CASIA-WebFace dataset.
+| Method | Rank1 | Rank5 |
+| :--- | :--- | :--- |
+| CosFace | 56.7 | 62.7 |
+| CosFace + NDR | **61.4** | **66.5** |
+| Adaface | 61.8 | 66.8 |
+| Adaface + NDR | **62.9** | **68.1** |
+
+
+
 Code From [Adaface](https://github.com/mk-minchul/AdaFace)
 
