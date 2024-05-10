@@ -30,4 +30,4 @@ Comparison of identification rates at Rank 1 and Rank 5 on the TinyFace dataset,
 
 
 Code From [Adaface](https://github.com/mk-minchul/AdaFace)
-
+dicker [NDR_FACE](https://hub.docker.com/repository/docker/ranfo42/ndr_face/general)
